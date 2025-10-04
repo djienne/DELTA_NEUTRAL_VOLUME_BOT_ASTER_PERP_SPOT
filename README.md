@@ -86,14 +86,14 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 
 | Parameter                 | Description                                                                 | Default |
 | ------------------------- | --------------------------------------------------------------------------- | ------- |
-| `capital_fraction`        | Percentage of available USDT to use per position.                           | `0.95`  |
-| `min_funding_apr`         | Minimum annualized APR to consider for an opportunity.                      | `15`    |
+| `capital_fraction`        | Percentage of available USDT to use per position.                           | `0.50`  |
+| `min_funding_apr`         | Minimum annualized APR to consider for an opportunity.                      | `7`     |
 | `use_funding_ma`          | Use a moving average of funding rates for stability.                        | `true`  |
 | `funding_ma_periods`      | Number of periods for the funding rate moving average.                      | `10`    |
-| `fee_coverage_multiplier` | Close when funding covers fees by this factor (e.g., 1.5 = 150%).           | `1.5`   |
-| `max_position_age_hours`  | Maximum hours to hold a position before rotating.                           | `24`    |
+| `fee_coverage_multiplier` | Close when funding covers fees by this factor (e.g., 1.5 = 150%).           | `1.8`   |
+| `max_position_age_hours`  | Maximum hours to hold a position before rotating.                           | `336`   |
 | `loop_interval_seconds`   | Seconds to wait between each strategy cycle.                                | `300`   |
-| `emergency_stop_loss_pct` | Hard stop-loss as a percentage of position value.                           | `-10`   |
+| `emergency_stop_loss_pct` | Hard stop-loss as a percentage of position value.                           | `-50`   |
 
 ## 🚀 Usage
 
