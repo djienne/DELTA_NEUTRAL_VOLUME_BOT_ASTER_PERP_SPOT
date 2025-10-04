@@ -78,6 +78,13 @@ APIV1_PUBLIC_KEY="your_v1_public_key"
 APIV1_PRIVATE_KEY="your_v1_private_key"
 ```
 
+You need to create both **API** and **Pro API** credentials on Aster Finance as shown below:
+
+![API Management](APIs.png)
+
+<img src="infos_API_p1.png" alt="Info API 1" width="600"/>
+<img src="infos_API_p2.png" alt="Info API 1" width="600"/>
+
 > **Note:** Never commit your `.env` file.
 
 ### 3. Configure the Strategy
