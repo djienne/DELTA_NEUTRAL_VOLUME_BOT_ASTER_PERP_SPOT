@@ -1,0 +1,18 @@
+{
+  "current_position": {
+    "symbol": "ASTERUSDT",
+    "capital": 59.06174659,
+    "funding_rate": 0.000335471,
+    "effective_apr": 18.367037250000003,
+    "spot_qty": 28.488268499999997,
+    "perp_qty": 28.49
+  },
+  "position_opened_at": "2025-10-03T20:07:51.185497",
+  "total_funding_received": 0.0,
+  "entry_fees_paid": 0.118101706033375,
+  "cycle_count": 123,
+  "total_profit_loss": 0.266898666156,
+  "total_positions_opened": 2,
+  "total_positions_closed": 2,
+  "last_updated": "2025-10-03T20:07:51.188131"
+}
