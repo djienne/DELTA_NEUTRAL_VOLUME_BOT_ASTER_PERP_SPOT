@@ -136,7 +136,7 @@ python volume_farming_strategy.py
 
 > **Capital**: A minimum of **$50 USDT** is recommended ($25 spot, $25 perpetuals). The bot automatically rebalances USDT between wallets.
 
-> **Fees**: Entry and exit fees are ~0.1% each. The bot ensures funding payments cover these fees before closing a position for profit.
+> **Fees**: Entry and exit fees are ~0.0675% each. The bot ensures funding payments cover these fees before closing a position for profit.
 
 ## 🔍 Troubleshooting
 
