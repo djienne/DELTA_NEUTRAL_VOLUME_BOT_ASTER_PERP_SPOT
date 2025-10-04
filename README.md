@@ -92,7 +92,7 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 | `funding_ma_periods`      | Number of periods for the funding rate moving average.                      | `10`    |
 | `fee_coverage_multiplier` | Close when funding covers fees by this factor (e.g., 1.5 = 150%).           | `1.8`   |
 | `max_position_age_hours`  | Maximum hours to hold a position before rotating.                           | `336`   |
-| `loop_interval_seconds`   | Seconds to wait between each strategy cycle.                                | `300`   |
+| `loop_interval_seconds`   | Seconds to wait between each strategy cycle.                                | `900`   |
 | `emergency_stop_loss_pct` | Hard stop-loss as a percentage of position value.                           | `-50`   |
 
 ## 🚀 Usage
