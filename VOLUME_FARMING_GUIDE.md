@@ -1,39 +1,39 @@
 # Delta-Neutral Funding Rate Farming - Strategy Guide
 
-## Overview
+## 📜 Overview
 
 This automated strategy manages delta-neutral positions to farm perpetual funding rates while minimizing market risk. It uses configurable moving averages for stable funding rate signals and includes comprehensive position tracking, automatic rebalancing, and intelligent position management.
 
 **Key Concept**: The bot maintains equal USD value in spot (long) and perpetual (short) positions. As funding payments accrue on the perpetual position, the bot captures these payments while market price movements largely cancel out between the two legs.
 
-## Key Features
+## ✨ Key Features
 
-### 1. Automatic Position Discovery
+### 1. 🕵️ Automatic Position Discovery
 - **Detects existing positions**: If you open a position manually, the bot will discover it on startup
 - **Fetches funding history**: Retrieves actual funding payments received from API
 - **Calculates position age**: Determines when the position was opened
 - **Adopts position tracking**: Automatically starts monitoring the existing position
 
-### 2. Funding Rate Analysis
+### 2. 📈 Funding Rate Analysis
 - **10-period moving average** (default): Smooths volatility over ~3.3 days of funding payments
 - **Real-time effective APR**: Calculates actual APR for 1x leverage
 - **Standard deviation tracking**: Measures funding rate stability
 - **Configurable periods**: Use `--ma-periods` to adjust (1-50 recommended)
 
-### 3. State Persistence
+### 3. 💾 State Persistence
 - **Automatic saving**: State saved after every cycle and trade
 - **Crash recovery**: Resumes from last saved state after restart
 - **Position tracking**: Remembers open positions, fees paid, and funding received
 - **Statistics tracking**: Cumulative P/L, positions opened/closed
 
-### 4. Automatic USDT Rebalancing
+### 4. ⚖️ Automatic USDT Rebalancing
 - **Before opening positions**: Rebalances USDT 50/50 between spot and perp to maximize available capital
 - **After closing positions**: Rebalances automatically to prepare for next position
 - **Smart transfers**: Only transfers if difference > $1 to avoid micro-transfers
 - **No manual intervention**: Uses your existing API keys to transfer between wallets
 - **Maximizes capital efficiency**: Ensures you can deploy the maximum position size
 
-### 5. Intelligent Exit Conditions
+### 5. 🧠 Intelligent Exit Conditions
 The bot closes positions when:
 1. **Fees covered**: Funding payments >= fee_coverage_multiplier × (entry + exit fees)
 2. **Better opportunity**: New pair with >10% APR improvement (min 4hr hold)
@@ -41,7 +41,7 @@ The bot closes positions when:
 4. **Health issues**: Imbalance >10% or critical position health
 5. **Emergency stop loss**: Unrealized PnL < -10% (configurable)
 
-## Usage
+## 🚀 Usage
 
 ### Starting the Bot
 
@@ -55,7 +55,7 @@ docker-compose up --build
 python volume_farming_strategy.py
 ```
 
-### Configuration File
+### ⚙️ Configuration File
 
 All parameters are set in `config_volume_farming_strategy.json`:
 
@@ -80,7 +80,7 @@ All parameters are set in `config_volume_farming_strategy.json`:
 }
 ```
 
-### Configuration Parameters Explained
+### 📝 Configuration Parameters Explained
 
 **Capital Management:**
 - `capital_fraction`: Percentage of available balance to use (Default: 0.50 = 50%)
@@ -107,7 +107,7 @@ All parameters are set in `config_volume_farming_strategy.json`:
 **Risk Management:**
 - `emergency_stop_loss_pct`: Hard stop if PnL drops below this (%) (Default: -50.0)
 
-## Position Discovery & Reconciliation Flow
+## 🔄 Position Discovery & Reconciliation Flow
 
 When you start the bot, it performs intelligent reconciliation between state file and exchange:
 
@@ -200,7 +200,7 @@ After startup reconciliation, the bot:
 4. Tracks health and PnL
 5. Updates state file after every cycle
 
-## State File Format
+## 📄 State File Format
 
 The bot saves state to `volume_farming_state.json`:
 
@@ -225,7 +225,7 @@ The bot saves state to `volume_farming_state.json`:
 }
 ```
 
-## Monitoring
+## 📊 Monitoring
 
 The bot logs to both console and `volume_farming.log`:
 
@@ -299,16 +299,16 @@ Rebalancing USDT before opening position...
 USDT wallets already balanced (difference < $1)
 ```
 
-## Best Practices
+## 👍 Best Practices
 
-### Capital Management
+### 💰 Capital Management
 - **Start small**: Test with $50-100 before scaling up
 - **Automatic rebalancing**: Bot handles USDT distribution between wallets
 - **Capital efficiency**: Uses 95% of available balance (configurable)
 - **Minimum requirement**: $50 total ($25 spot + $25 perpetual after rebalance)
 - **Reserve buffer**: Keep 5% reserve for fees and slippage
 
-### Moving Average Selection
+### 📈 Moving Average Selection
 - **3-5 periods**: Responsive, captures short-term opportunities
   - Pros: Quick to react to rate changes
   - Cons: More susceptible to volatility
@@ -322,7 +322,7 @@ USDT wallets already balanced (difference < $1)
   - Cons: Slower to detect opportunity changes
   - Best for: Conservative long-term farming
 
-### Fee Coverage Strategy
+### 🎯 Fee Coverage Strategy
 - **1.2x**: Aggressive rotation
   - More trading volume
   - Faster capital turnover
@@ -335,7 +335,7 @@ USDT wallets already balanced (difference < $1)
   - Longer hold times
   - May miss better opportunities
 
-### Position Age Limits
+### ⏳ Position Age Limits
 - **12 hours**: Maximum rotation
   - Best for: High-volatility markets
   - Risk: May close profitable positions early
@@ -346,13 +346,13 @@ USDT wallets already balanced (difference < $1)
   - Best for: Stable funding rate environments
   - Risk: May hold during rate degradation
 
-### Leverage Requirements
+### ❗ Leverage Requirements
 - **Always use 1x leverage**
 - Bot automatically validates and sets leverage
 - Higher leverage breaks delta-neutral assumption
 - Higher leverage = higher liquidation risk
 
-## Troubleshooting
+## 🛠️ Troubleshooting
 
 ### Bot doesn't find my position
 - Check if position is truly delta-neutral (balanced spot + short perp)
@@ -369,7 +369,7 @@ USDT wallets already balanced (difference < $1)
 - Restart bot - it will discover existing positions
 - Funding history will be fetched from API
 
-## Safety Features
+## 🛡️ Safety Features
 
 1. **Health checks**: Runs before every trade
 2. **Balance validation**: Ensures sufficient funds
@@ -379,7 +379,7 @@ USDT wallets already balanced (difference < $1)
 6. **Imbalance detection**: Monitors position drift
 7. **Critical issue detection**: Stops trading on severe problems
 
-## Performance Monitoring
+## 📈 Performance Monitoring
 
 Track these metrics in logs:
 - **Fees coverage ratio**: Progress toward profitability
@@ -389,7 +389,7 @@ Track these metrics in logs:
 - **Cumulative P/L**: Total strategy performance
 - **Positions opened/closed**: Activity count
 
-## Shutdown
+## 🔌 Shutdown
 
 Press `Ctrl+C` to gracefully shutdown:
 - Saves final state
@@ -399,7 +399,7 @@ Press `Ctrl+C` to gracefully shutdown:
 
 To force-close position on shutdown, modify `_shutdown()` method in code.
 
-## Codebase Architecture
+## 🏗️ Codebase Architecture
 
 ### Module Overview
 
@@ -445,7 +445,7 @@ The codebase is organized for maximum clarity and testability:
 - Added leverage validation for safety
 - Comprehensive error handling and edge case protection
 
-## Advanced Topics
+## 🎓 Advanced Topics
 
 ### Custom Strategy Development
 
@@ -471,7 +471,7 @@ For high-frequency operation:
 - Lower `fee_coverage_multiplier` for more aggressive rotation
 - Consider multiple bot instances for different strategies
 
-## Support and Contributing
+## 💬 Support and Contributing
 
 - **Issues**: Report bugs via GitHub Issues
 - **Documentation**: Keep README and this guide updated
