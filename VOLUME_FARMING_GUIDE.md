@@ -62,20 +62,20 @@ All parameters are set in `config_volume_farming_strategy.json`:
 ```json
 {
   "capital_management": {
-    "capital_fraction": 0.95
+    "capital_fraction": 0.50
   },
   "funding_rate_strategy": {
-    "min_funding_apr": 15.0,
+    "min_funding_apr": 7.0,
     "use_funding_ma": true,
     "funding_ma_periods": 10
   },
   "position_management": {
-    "fee_coverage_multiplier": 1.5,
-    "max_position_age_hours": 24,
-    "loop_interval_seconds": 300
+    "fee_coverage_multiplier": 1.8,
+    "max_position_age_hours": 336,
+    "loop_interval_seconds": 900
   },
   "risk_management": {
-    "emergency_stop_loss_pct": -10.0
+    "emergency_stop_loss_pct": -50.0
   }
 }
 ```
@@ -83,29 +83,29 @@ All parameters are set in `config_volume_farming_strategy.json`:
 ### Configuration Parameters Explained
 
 **Capital Management:**
-- `capital_fraction`: Percentage of available balance to use (0.95 = 95%)
+- `capital_fraction`: Percentage of available balance to use (Default: 0.50 = 50%)
 - Higher values = larger positions, less reserve
 
 **Funding Rate Strategy:**
-- `min_funding_apr`: Minimum APR to consider (%)
+- `min_funding_apr`: Minimum APR to consider (%) (Default: 7.0)
   - Too low: Accept unprofitable opportunities
   - Too high: Miss valid opportunities
 - `use_funding_ma`: Use moving average (recommended: true)
-- `funding_ma_periods`: MA calculation window (default: 10)
+- `funding_ma_periods`: MA calculation window (Default: 10)
   - Lower (3-5): Responsive but volatile
   - Default (10): Balanced
   - Higher (15-20): Stable but slower
 
 **Position Management:**
-- `fee_coverage_multiplier`: When to close (1.5 = 150% of fees)
+- `fee_coverage_multiplier`: When to close (Default: 1.8 = 180% of fees)
   - 1.2x: Aggressive, more rotation
-  - 1.5x: Balanced
+  - 1.8x: Balanced
   - 2.0x+: Conservative, ensure profit
-- `max_position_age_hours`: Force close after this duration
-- `loop_interval_seconds`: Time between checks (300 = 5 minutes)
+- `max_position_age_hours`: Force close after this duration (Default: 336)
+- `loop_interval_seconds`: Time between checks (Default: 900 = 15 minutes)
 
 **Risk Management:**
-- `emergency_stop_loss_pct`: Hard stop if PnL drops below this (%)
+- `emergency_stop_loss_pct`: Hard stop if PnL drops below this (%) (Default: -50.0)
 
 ## Position Discovery & Reconciliation Flow
 
@@ -212,8 +212,7 @@ The bot saves state to `volume_farming_state.json`:
     "funding_rate": 0.0001234,
     "effective_apr": 45.32,
     "spot_qty": 0.00362,
-    "perp_qty": 0.00362,
-    "entry_price": 69000.0
+    "perp_qty": 0.00362
   },
   "position_opened_at": "2025-01-15T14:30:22.123456",
   "total_funding_received": 0.0856,
@@ -267,7 +266,7 @@ Evaluating position on BTCUSDT...
   Funding periods: 0.53
   Estimated funding received: $0.0856
   Total fees (entry + exit): $0.75
-  Fees coverage ratio: 0.11x (target: 1.5x)
+  Fees coverage: [██████-------------------] 24.1% (0.43x / 1.8x)
 Position healthy, continuing to hold...
 ```
 
@@ -406,27 +405,27 @@ To force-close position on shutdown, modify `_shutdown()` method in code.
 
 The codebase is organized for maximum clarity and testability:
 
-**`aster_api_manager.py` (49KB)**
+**`aster_api_manager.py`**
 - All API interactions (spot, perpetual, transfers)
 - Integrated Ethereum signature authentication
 - Funding rate moving average fetching
 - Position management and health checks
 - Exchange info caching and precision handling
 
-**`strategy_logic.py` (23KB)**
+**`strategy_logic.py`**
 - Pure computational logic (no API calls)
 - Delta-neutral calculations
 - Funding rate MA calculations
 - Risk assessment and position health
 - Position sizing and rebalancing logic
 
-**`volume_farming_strategy.py` (52KB)**
+**`volume_farming_strategy.py`**
 - Main strategy loop and orchestration
 - Position monitoring and state management
 - Opportunity scanning and decision making
 - State persistence and recovery
 
-**`utils.py` (711 bytes)**
+**`utils.py`**
 - Shared utility functions
 - Precision truncation for order sizing
 
