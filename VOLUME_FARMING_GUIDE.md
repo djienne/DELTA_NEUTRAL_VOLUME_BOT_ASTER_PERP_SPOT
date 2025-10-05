@@ -463,18 +463,4 @@ The modular architecture allows easy integration:
 - Use `aster_api_manager.py` as standalone API client
 - Parse `volume_farming_state.json` for external monitoring
 
-### Performance Optimization
-
-For high-frequency operation:
-- Reduce `loop_interval_seconds` (minimum 60 recommended)
-- Use shorter MA periods (3-5) for faster response
-- Lower `fee_coverage_multiplier` for more aggressive rotation
-- Consider multiple bot instances for different strategies
-
-## 💬 Support and Contributing
-
-- **Issues**: Report bugs via GitHub Issues
-- **Documentation**: Keep README and this guide updated
-- **Testing**: Always test changes with small capital first
-- **Logs**: Include relevant logs when reporting issues
 
