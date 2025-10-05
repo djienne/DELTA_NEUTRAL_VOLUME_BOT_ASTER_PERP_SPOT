@@ -483,8 +483,10 @@ class VolumeFarmingStrategy:
 
             # Basic balance check - just ensure we have some USDT available
             if not self.current_position:
-                if spot_usdt < 1.0 or perp_usdt < 1.0:
-                    logger.error(f"Insufficient balance. Spot: ${spot_usdt:.2f}, Perp: ${perp_usdt:.2f}")
+                if spot_usdt + perp_usdt < 30.0:
+                    str = f"Insufficient balance. Spot: ${spot_usdt:.2f}, Perp: ${perp_usdt:.2f} (needs at least 30$ in total)"
+                    logger.error(str)
+                    logger.info(str)
                     return False
 
             # Check existing positions health
@@ -1091,4 +1093,5 @@ async def main():
 
 
 if __name__ == '__main__':
+
     asyncio.run(main())
