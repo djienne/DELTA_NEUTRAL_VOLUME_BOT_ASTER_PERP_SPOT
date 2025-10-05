@@ -304,7 +304,7 @@ USDT wallets already balanced (difference < $1)
 ### 💰 Capital Management
 - **Start small**: Test with $50-100 before scaling up
 - **Automatic rebalancing**: Bot handles USDT distribution between wallets
-- **Capital efficiency**: Uses 95% of available balance (configurable)
+- **Capital efficiency**: Uses 50% of available balance (configurable)
 - **Minimum requirement**: $50 total ($25 spot + $25 perpetual after rebalance)
 - **Reserve buffer**: Keep 5% reserve for fees and slippage
 
@@ -477,3 +477,4 @@ For high-frequency operation:
 - **Documentation**: Keep README and this guide updated
 - **Testing**: Always test changes with small capital first
 - **Logs**: Include relevant logs when reporting issues
+
