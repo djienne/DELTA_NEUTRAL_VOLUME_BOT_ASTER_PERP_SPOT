@@ -202,27 +202,6 @@ python volume_farming_strategy.py
 
 <img src="screen.png" width="800">
 
-## 📌 Important Notes
-
-> **Volume Filtering**: The bot only trades pairs with **≥ $250M 24h volume** to ensure:
-> - Sufficient liquidity for position entry/exit
-> - Minimal slippage on orders
-> - Stable funding rates (high-volume pairs tend to have more predictable funding)
-> - Lower risk of manipulation
->
-> Use `check_funding_rates.py` to see which pairs meet this requirement. This threshold filters out low-liquidity pairs that may have attractive funding rates but carry execution risks.
-
-> **Leverage**: The bot supports configurable leverage (1x-3x) via the config file.
-> - **1x leverage**: 50/50 split between spot and perp - safest option
-> - **2x leverage**: 67% spot / 33% perp - moderate risk, better capital efficiency
-> - **3x leverage** (default): 75% spot / 25% perp - higher risk, maximum capital efficiency
->
-> The bot automatically sets leverage on the exchange and maintains the same position size on both sides. Leverage changes only apply to new positions, never mid-position. **Important:** When using higher leverage (2x-3x), ensure your `emergency_stop_loss_pct` is set appropriately (default: -20%) to avoid liquidation. See [LEVERAGE_FEATURE.md](LEVERAGE_FEATURE.md) for details.
-
-> **Capital**: A minimum of **$50 USDT** is recommended (split according to leverage setting). The bot automatically rebalances USDT between wallets based on your leverage configuration.
-
-> **Fees**: Entry and exit fees are ~0.1% each. The bot ensures funding payments cover these fees before closing a position for profit.
-
 > ## ⚠️ Disclaimer
 >
 > **Trading cryptocurrencies involves significant risk.** This bot is provided as-is, without any warranty or guarantee of profitability. The authors are not responsible for any financial losses. Use at your own risk and only trade with capital you can afford to lose.
