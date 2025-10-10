@@ -132,8 +132,11 @@ python volume_farming_strategy.py
 
 ### Utility Scripts
 ```bash
-# Check funding rates and volume filtering (NEW)
+# Check funding rates and volume filtering
 python check_funding_rates.py
+
+# Emergency exit - manually close current position
+python emergency_exit.py
 
 # Calculate safe stop-loss for current leverage
 python calculate_safe_stoploss.py
@@ -285,7 +288,7 @@ All configuration in `config_volume_farming_strategy.json`:
 
 ### When Creating Utility Scripts
 
-**Example**: `check_funding_rates.py` provides standalone funding rate analysis.
+**Examples**: `check_funding_rates.py` provides standalone funding rate analysis, `emergency_exit.py` provides manual position closure.
 
 1. **API Manager initialization** - Use correct parameter names:
    - `apiv1_public` and `apiv1_private` (NOT `apiv1_public_key`/`apiv1_private_key`)
@@ -298,6 +301,8 @@ All configuration in `config_volume_farming_strategy.json`:
 4. **Color-coded output** - Follow bot's colorama scheme
 5. **Async/await** - All API calls should be async with proper session management
 6. **Error handling** - Use `return_exceptions=True` in `asyncio.gather()` for resilience
+7. **State file operations** - When modifying state, always update `last_updated` with `datetime.utcnow().isoformat()`
+8. **User confirmations** - For destructive operations (like closing positions), always require explicit confirmation
 
 ### When Working with Terminal Output Colors
 
@@ -342,6 +347,7 @@ logger.info(f"PnL: {pnl_color}${pnl:.2f}{Style.RESET_ALL}")
 
 **Utility Scripts:**
 - `check_funding_rates.py` - Displays funding rates and volume filtering analysis for all delta-neutral pairs
+- `emergency_exit.py` - Manually closes current delta-neutral position with confirmation and PnL display
 - `calculate_safe_stoploss.py` - Validates stop-loss calculations for all leverage levels
 - `get_volume_24h.py` - Fetches 24h volume for specific pairs
 
@@ -416,6 +422,11 @@ The bot tracks three types of position PnL:
   - Stop-loss automatically calculated: 1x=-50%, 2x=-33%, 3x=-24%
   - Uses perp PnL (more volatile) not combined DN PnL
   - Includes 0.7% safety buffer from liquidation
+- **Manual Emergency Exit**: Use `emergency_exit.py` for immediate manual position closure
+  - Displays current PnL before execution
+  - Requires explicit confirmation
+  - Closes both spot and perp legs simultaneously
+  - Updates state file on success
 - **Health Check Failures**: Skips cycle, logs warning, retries next cycle
 - **API Errors**: Logged but bot continues (unless critical)
 

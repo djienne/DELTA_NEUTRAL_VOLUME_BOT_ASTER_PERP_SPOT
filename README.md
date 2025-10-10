@@ -70,6 +70,30 @@ This is useful for:
 -   Monitoring volume requirements before starting the bot
 -   Debugging why certain pairs aren't being traded
 
+### Emergency Exit
+
+Use `emergency_exit.py` to manually close your delta-neutral position immediately:
+
+```bash
+python emergency_exit.py
+```
+
+This script will:
+-   **Read current position** from `volume_farming_state.json`
+-   **Display position details** (symbol, leverage, capital, entry price, opened time)
+-   **Show current PnL** (perpetual, spot, combined, net including fees and funding)
+-   **Ask for confirmation** before executing
+-   **Close both legs simultaneously** using market orders (spot sell + perp position close)
+-   **Update state file** after successful closure
+
+This is useful for:
+-   Emergency situations requiring immediate position closure
+-   Manual intervention when bot behavior is unexpected
+-   Quickly exiting positions before major market events
+-   Testing position closure without waiting for bot cycle
+
+**⚠️ Warning:** This uses market orders which may have slippage. Use only when necessary.
+
 ## 📋 Prerequisites
 
 > -   [Docker](https://www.docker.com/get-started) & [Docker Compose](https://docs.docker.com/compose/install/)
