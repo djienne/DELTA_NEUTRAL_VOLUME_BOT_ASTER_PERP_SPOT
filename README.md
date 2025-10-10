@@ -223,55 +223,6 @@ python volume_farming_strategy.py
 
 > **Fees**: Entry and exit fees are ~0.1% each. The bot ensures funding payments cover these fees before closing a position for profit.
 
-## 🔍 Troubleshooting
-
--   **Position not tracked after restart?** Delete `volume_farming_state.json` and restart the bot. It will rediscover the position from the exchange.
--   **Insufficient balance errors?** Ensure you have USDT in both spot and perpetual wallets. The bot can auto-rebalance if the total balance is sufficient.
--   **No opportunities found?** Your `min_funding_apr` might be too high, or market conditions may not be favorable. Also check if pairs are being filtered by volume requirements.
--   **Why isn't the bot trading pair X?** Run `check_funding_rates.py` to see if the pair has sufficient volume (≥ $250M 24h). Pairs below this threshold are automatically filtered out for safety.
--   **Leverage mismatch warnings?** This is normal if you changed leverage in config while holding a position. The position maintains its original leverage until closed, then new positions use the new leverage setting.
--   **Spot PnL showing $0.00?** The bot will automatically fix this on the next position evaluation cycle by retrieving the entry price from the exchange.
--   **Health check failures with valid leverage?** Ensure your bot version supports 1x-3x leverage validation (not hardcoded to 1x only).
--   **Reset portfolio PnL baseline?** Delete `volume_farming_state.json` to reset the portfolio baseline. The bot will capture a new baseline on next start.
--   **Portfolio PnL incorrect after deposit/withdrawal?** The portfolio PnL tracking assumes no external transfers. If you deposited or withdrew funds, delete the state file to recapture the baseline.
-
-## 🆕 Recent Improvements
-
-**October 2025 Update:**
-- ✅ **Trading Cycle Counting**: Cycle count now based on completed trading cycles (open → hold → close)
-  - Previously counted every loop iteration (check cycle)
-  - Now increments only when a position is successfully closed
-  - Provides accurate tracking of actual trading activity
-  - Displayed separately: "CHECK #N" for loop iterations, "Trading Cycles Completed: N" for actual trades
-- ✅ **Funding Rate Analysis Utility**: New `check_funding_rates.py` script for pre-trading analysis
-  - Displays current APR for all delta-neutral pairs
-  - Shows which pairs pass/fail the $250M volume requirement
-  - Identifies best opportunities without running the bot
-  - Useful for debugging and monitoring market conditions
-- ✅ **Long-term Portfolio PnL Tracking**: Tracks total portfolio performance from initial baseline with automatic asset valuation
-  - Captures initial portfolio value (all spot assets + perp wallet + unrealized PnL)
-  - Displays real-time total portfolio value and PnL in each cycle header
-  - Shows both absolute ($) and relative (%) performance with baseline timestamp
-  - Persists across bot restarts via state file
-- ✅ **Enhanced Colorful Terminal Output**: Beautiful color-coded output for easier monitoring
-  - Green for profits/success, Red for losses/errors, Yellow for warnings
-  - Cyan for information, Magenta for important values
-  - Dynamic colors based on PnL status and progress bars
-- ✅ **Enhanced PnL Tracking**: Now displays separate Perp, Spot, and Combined DN PnL with funding and fees included
-- ✅ **Entry Price Tracking**: Automatically saves and recovers entry prices for accurate spot PnL calculations
-- ✅ **UTC Timestamps**: All times are now displayed in UTC for consistency (position opened, cycles, funding times)
-- ✅ **Human-Readable Funding Times**: Next funding time shows as `YYYY-MM-DD HH:MM UTC` instead of raw timestamps
-- ✅ **Improved Health Checks**: Now correctly validates 1x-3x leverage (no longer hardcoded to 1x)
-- ✅ **Better Logging**: Clear labeling of what triggers stop-loss vs what shows overall strategy performance
-- ✅ **Automatic Stop-Loss Calculation**: Stop-loss is now automatically calculated based on leverage with 0.7% safety buffer
-
-## 📚 Additional Documentation
-
-- **Strategy Guide**: [VOLUME_FARMING_GUIDE.md](VOLUME_FARMING_GUIDE.md) - Detailed strategy explanation
-- **Leverage Feature**: [LEVERAGE_FEATURE.md](LEVERAGE_FEATURE.md) - Complete leverage documentation with examples
-- **Implementation Details**: [LEVERAGE_IMPLEMENTATION_SUMMARY.md](LEVERAGE_IMPLEMENTATION_SUMMARY.md) - Technical implementation summary
-- **Developer Guide**: [CLAUDE.md](CLAUDE.md) - Comprehensive guide for working with the codebase
-
 > ## ⚠️ Disclaimer
 >
 > **Trading cryptocurrencies involves significant risk.** This bot is provided as-is, without any warranty or guarantee of profitability. The authors are not responsible for any financial losses. Use at your own risk and only trade with capital you can afford to lose.
