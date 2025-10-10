@@ -23,6 +23,7 @@ import asyncio
 import os
 import sys
 import json
+import math
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
@@ -61,9 +62,9 @@ class VolumeFarmingStrategy:
         fee_coverage_multiplier: float = 1.5,
         loop_interval_seconds: int = 300,  # 5 minutes
         max_position_age_hours: int = 24,
-        emergency_stop_loss_pct: float = -10.0,
         use_funding_ma: bool = True,
-        funding_ma_periods: int = 10
+        funding_ma_periods: int = 10,
+        leverage: int = 1
     ):
         """
         Initialize the volume farming strategy.
@@ -74,10 +75,13 @@ class VolumeFarmingStrategy:
             fee_coverage_multiplier: Multiplier for fee coverage (1.5 = 150% of fees)
             loop_interval_seconds: Seconds between strategy loop cycles
             max_position_age_hours: Maximum hours to hold a position
-            emergency_stop_loss_pct: Emergency stop loss percentage
             use_funding_ma: Use moving average of funding rates instead of instantaneous
             funding_ma_periods: Number of periods for funding rate moving average
+            leverage: Leverage multiplier (1-3). 1=50/50, 2=33% perp/67% spot, 3=25% perp/75% spot
         """
+        # Validate leverage
+        if leverage < 1 or leverage > 3:
+            raise ValueError(f"Leverage must be between 1 and 3, got {leverage}")
         self.api_manager = AsterApiManager(
             api_user=os.getenv('API_USER'),
             api_signer=os.getenv('API_SIGNER'),
@@ -93,14 +97,19 @@ class VolumeFarmingStrategy:
         self.fee_coverage_multiplier = fee_coverage_multiplier
         self.loop_interval_seconds = loop_interval_seconds
         self.max_position_age = timedelta(hours=max_position_age_hours)
-        self.emergency_stop_loss_pct = emergency_stop_loss_pct
         self.use_funding_ma = use_funding_ma
         self.funding_ma_periods = funding_ma_periods
+        self.leverage = leverage
+
+        # Calculate emergency stop-loss automatically based on leverage
+        # This ensures we stay safely away from liquidation
+        self.emergency_stop_loss_pct = self._calculate_safe_stoploss(leverage)
 
         # State tracking
         self.state_file = 'volume_farming_state.json'
         self.current_position: Optional[Dict[str, Any]] = None
         self.position_opened_at: Optional[datetime] = None
+        self.position_leverage: Optional[int] = None  # Track leverage used for current position
         self.total_funding_received: float = 0.0
         self.entry_fees_paid: float = 0.0
         self.running = True
@@ -109,19 +118,98 @@ class VolumeFarmingStrategy:
         self.total_positions_opened: int = 0
         self.total_positions_closed: int = 0
 
+        # Portfolio PnL tracking (long-term performance)
+        self.initial_portfolio_value_usdt: Optional[float] = None  # Baseline portfolio value
+        self.initial_portfolio_timestamp: Optional[datetime] = None  # When baseline was captured
+
         # Load persisted state if available
         self._load_state()
 
-        logger.info(f"Volume Farming Strategy initialized")
-        logger.info(f"Capital Fraction: {capital_fraction*100:.0f}% of available USDT")
-        logger.info(f"Min Funding APR: {min_funding_apr}%")
-        logger.info(f"Fee Coverage Multiplier: {fee_coverage_multiplier}x")
-        logger.info(f"Funding Rate Mode: {'Moving Average (' + str(funding_ma_periods) + ' periods)' if use_funding_ma else 'Instantaneous'}")
+        logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+        logger.info(f"{Fore.CYAN}Volume Farming Strategy initialized{Style.RESET_ALL}")
+        logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+        logger.info(f"Capital Fraction: {Fore.MAGENTA}{capital_fraction*100:.0f}%{Style.RESET_ALL} of available USDT")
+        logger.info(f"Emergency Stop-Loss: {Fore.RED}{self.emergency_stop_loss_pct:.1f}%{Style.RESET_ALL} (auto-calculated for {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} leverage with 0.7% safety buffer)")
+
+        # Check if we have a position with different leverage before logging config leverage
+        has_leverage_mismatch = (self.current_position and
+                                self.position_leverage and
+                                self.position_leverage != self.leverage)
+
+        if has_leverage_mismatch:
+            leverage_msg = f"Leverage: {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} (Perp: {Fore.CYAN}{100/(leverage+1):.1f}%{Style.RESET_ALL}, Spot: {Fore.CYAN}{100*leverage/(leverage+1):.1f}%{Style.RESET_ALL}) - {Fore.YELLOW}Current position using {self.position_leverage}x, will switch at next rebalancing{Style.RESET_ALL}"
+            logger.info(leverage_msg)
+            # Also print to terminal to ensure visibility
+            print(f"\n{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}⚠️  LEVERAGE MISMATCH DETECTED{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+            print(f"Config leverage:   {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} (will apply to new positions)")
+            print(f"Position leverage: {Fore.MAGENTA}{self.position_leverage}x{Style.RESET_ALL} (current ASTERUSDT position)")
+            print(f"Action required:   Position will switch to {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} at next rebalancing")
+            print(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}\n")
+        else:
+            logger.info(f"Leverage: {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} (Perp: {Fore.CYAN}{100/(leverage+1):.1f}%{Style.RESET_ALL}, Spot: {Fore.CYAN}{100*leverage/(leverage+1):.1f}%{Style.RESET_ALL})")
+
+        logger.info(f"Min Funding APR: {Fore.GREEN}{min_funding_apr}%{Style.RESET_ALL}")
+        logger.info(f"Fee Coverage Multiplier: {Fore.CYAN}{fee_coverage_multiplier}x{Style.RESET_ALL}")
+        logger.info(f"Funding Rate Mode: {Fore.YELLOW}{'Moving Average (' + str(funding_ma_periods) + ' periods)' if use_funding_ma else 'Instantaneous'}{Style.RESET_ALL}")
 
         if self.current_position:
             logger.info(f"{Fore.YELLOW}Recovered open position: {self.current_position['symbol']}{Style.RESET_ALL}")
-            logger.info(f"  Opened at: {self.position_opened_at}")
+            logger.info(f"  Opened at: {self.position_opened_at.strftime('%Y-%m-%d %H:%M:%S')} UTC")
             logger.info(f"  Entry fees: ${self.entry_fees_paid:.4f}")
+            if self.position_leverage:
+                logger.info(f"  Position leverage: {self.position_leverage}x")
+                logger.debug(f"[LEVERAGE] Recovered position {self.current_position['symbol']} at {self.position_leverage}x leverage")
+                if self.position_leverage != self.leverage:
+                    logger.warning(f"  Config leverage is {self.leverage}x but position opened at {self.position_leverage}x")
+                    logger.warning(f"  Position will maintain {self.position_leverage}x until closed. New positions will use {self.leverage}x.")
+                    logger.debug(f"[LEVERAGE] Leverage mismatch: position={self.position_leverage}x, config={self.leverage}x - preserving position leverage")
+
+    @staticmethod
+    def _calculate_safe_stoploss(leverage: int, maintenance_margin: float = 0.005, safety_buffer: float = 0.007) -> float:
+        """
+        Calculate maximum safe stop-loss for SHORT perpetual position in delta-neutral strategy.
+
+        This calculation ensures the stop-loss triggers BEFORE reaching liquidation,
+        with a safety buffer to account for fees, slippage, and volatility.
+
+        Args:
+            leverage: Leverage multiplier (1-3)
+            maintenance_margin: Exchange maintenance margin rate (default: 0.5%)
+            safety_buffer: Safety buffer in price fraction (default: 0.7%)
+                          Includes: fees (~0.1%), slippage (~0.2%), volatility (~0.4%)
+
+        Returns:
+            Maximum safe stop-loss as negative percentage (e.g., -24.0 for -24%)
+
+        Formula:
+            1. Calculate max price move before liquidation: s_max = [(1 + 1/L)/(1 + m) - 1] - b
+            2. Adjust for delta-neutral capital allocation: PnL% = -s_max * [L/(L+1)]
+            3. Round down for extra safety
+
+        Example for 3x leverage:
+            - Liquidation at +32.67% price move
+            - Max safe stop at +31.97% (with 0.7% buffer)
+            - Perp allocation: 75% of total capital
+            - Max safe stop-loss: -31.97% × 0.75 = -23.98% ≈ -24%
+        """
+        L = leverage
+        m = maintenance_margin
+        b = safety_buffer
+
+        # Calculate max price distance before hitting liquidation buffer (for SHORT)
+        s_max = ((1 + 1/L) / (1 + m) - 1) - b
+
+        # In delta-neutral strategy, perp is only L/(L+1) of total capital
+        # So PnL relative to total deployed capital is:
+        perp_fraction = L / (L + 1)
+        max_stop_pnl = -s_max * perp_fraction
+
+        # Convert to percentage and round down for safety
+        max_stop_pct = math.floor(max_stop_pnl * 100)
+
+        return float(max_stop_pct)
 
     def _load_state(self):
         """Load persisted state from JSON file with validation."""
@@ -157,6 +245,33 @@ class VolumeFarmingStrategy:
                 logger.error(f"Invalid numeric data in state file: {e}")
                 # Keep defaults
 
+            # Load position leverage if it exists (separate try block since it can be None)
+            try:
+                if self.current_position and 'position_leverage' in state:
+                    leverage_value = state.get('position_leverage')
+                    if leverage_value is not None:
+                        self.position_leverage = int(leverage_value)
+                    else:
+                        self.position_leverage = None
+                else:
+                    self.position_leverage = None
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid position_leverage in state file: {e}, setting to None")
+                self.position_leverage = None
+
+            # Load portfolio baseline values if they exist
+            try:
+                if 'initial_portfolio_value_usdt' in state:
+                    self.initial_portfolio_value_usdt = float(state.get('initial_portfolio_value_usdt'))
+                if 'initial_portfolio_timestamp' in state:
+                    timestamp_str = state.get('initial_portfolio_timestamp')
+                    if timestamp_str:
+                        self.initial_portfolio_timestamp = datetime.fromisoformat(timestamp_str)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid portfolio baseline data in state file: {e}")
+                self.initial_portfolio_value_usdt = None
+                self.initial_portfolio_timestamp = None
+
             # Parse datetime if position exists
             if self.current_position:
                 opened_at_str = state.get('position_opened_at')
@@ -170,10 +285,11 @@ class VolumeFarmingStrategy:
                         self.current_position = None
 
             logger.info(f"{Fore.GREEN}State loaded successfully from {self.state_file}{Style.RESET_ALL}")
-            logger.info(f"  Total cycles: {self.cycle_count}")
-            logger.info(f"  Total positions opened: {self.total_positions_opened}")
-            logger.info(f"  Total positions closed: {self.total_positions_closed}")
-            logger.info(f"  Cumulative P/L: ${self.total_profit_loss:.4f}")
+            logger.info(f"  Total cycles: {Fore.CYAN}{self.cycle_count}{Style.RESET_ALL}")
+            logger.info(f"  Total positions opened: {Fore.CYAN}{self.total_positions_opened}{Style.RESET_ALL}")
+            logger.info(f"  Total positions closed: {Fore.CYAN}{self.total_positions_closed}{Style.RESET_ALL}")
+            pnl_color = Fore.GREEN if self.total_profit_loss >= 0 else Fore.RED
+            logger.info(f"  Cumulative P/L: {pnl_color}${self.total_profit_loss:.4f}{Style.RESET_ALL}")
 
         except json.JSONDecodeError as e:
             logger.error(f"Corrupted state file (invalid JSON): {e}")
@@ -188,13 +304,16 @@ class VolumeFarmingStrategy:
             state = {
                 'current_position': self.current_position,
                 'position_opened_at': self.position_opened_at.isoformat() if self.position_opened_at else None,
+                'position_leverage': self.position_leverage,
                 'total_funding_received': self.total_funding_received,
                 'entry_fees_paid': self.entry_fees_paid,
                 'cycle_count': self.cycle_count,
                 'total_profit_loss': self.total_profit_loss,
                 'total_positions_opened': self.total_positions_opened,
                 'total_positions_closed': self.total_positions_closed,
-                'last_updated': datetime.now().isoformat()
+                'initial_portfolio_value_usdt': self.initial_portfolio_value_usdt,
+                'initial_portfolio_timestamp': self.initial_portfolio_timestamp.isoformat() if self.initial_portfolio_timestamp else None,
+                'last_updated': datetime.utcnow().isoformat()
             }
 
             with open(self.state_file, 'w') as f:
@@ -204,6 +323,135 @@ class VolumeFarmingStrategy:
 
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
+
+    async def _capture_initial_portfolio(self):
+        """
+        Capture the initial portfolio value as baseline for long-term PnL tracking.
+        This should only be called once when the bot starts fresh (no baseline in state).
+
+        Initial Portfolio Value = Total Spot Value + Perp Wallet Balance + Perp Unrealized PnL
+        """
+        try:
+            logger.info(f"{Fore.CYAN}Capturing initial portfolio baseline...{Style.RESET_ALL}")
+
+            # Use the same calculation method as _get_current_portfolio_value()
+            initial_value = await self._get_current_portfolio_value()
+
+            if initial_value is None:
+                logger.error("Failed to calculate initial portfolio value")
+                return
+
+            # Store baseline
+            self.initial_portfolio_value_usdt = initial_value
+            self.initial_portfolio_timestamp = datetime.utcnow()
+
+            logger.info(f"{Fore.GREEN}Initial portfolio baseline captured:{Style.RESET_ALL}")
+            logger.info(f"  {Fore.MAGENTA}Total Baseline: ${initial_value:.2f}{Style.RESET_ALL}")
+            logger.info(f"  Timestamp: {Fore.YELLOW}{self.initial_portfolio_timestamp.strftime('%Y-%m-%d %H:%M:%S')} UTC{Style.RESET_ALL}")
+
+            # Save to state immediately
+            self._save_state()
+
+        except Exception as e:
+            logger.error(f"Error capturing initial portfolio baseline: {e}", exc_info=True)
+
+    async def _get_current_portfolio_value(self) -> Optional[float]:
+        """
+        Calculate current total portfolio value including all assets.
+
+        Returns:
+            Total portfolio value in USDT, or None if unable to fetch
+        """
+        try:
+            # Get comprehensive portfolio data
+            portfolio_data = await self.api_manager.get_comprehensive_portfolio_data()
+            if not portfolio_data:
+                return None
+
+            # SPOT SIDE: Calculate total value of all spot holdings
+            spot_balances = portfolio_data.get('spot_balances', [])
+            spot_total_value = 0.0
+
+            for balance in spot_balances:
+                asset = balance.get('asset')
+                free_amount = float(balance.get('free', 0))
+
+                if free_amount <= 0:
+                    continue
+
+                if asset == 'USDT':
+                    # USDT is already in USDT
+                    spot_total_value += free_amount
+                else:
+                    # For other assets, get current price and convert to USDT value
+                    try:
+                        symbol = f"{asset}USDT"
+                        # Get current price from perp market (same price as spot)
+                        import aiohttp
+                        if not self.api_manager.session:
+                            self.api_manager.session = aiohttp.ClientSession()
+
+                        perp_ticker_url = f"https://fapi.asterdex.com/fapi/v1/ticker/price?symbol={symbol}"
+                        async with self.api_manager.session.get(perp_ticker_url) as resp:
+                            if resp.status == 200:
+                                ticker_data = await resp.json()
+                                current_price = float(ticker_data.get('price', 0))
+                                asset_value_usdt = free_amount * current_price
+                                spot_total_value += asset_value_usdt
+                                logger.debug(f"Spot {asset}: {free_amount:.8f} @ ${current_price:.2f} = ${asset_value_usdt:.2f}")
+                    except Exception as price_error:
+                        logger.warning(f"Could not get price for {asset}: {price_error}")
+                        # Skip this asset if we can't get price
+                        continue
+
+            # PERP SIDE: Get wallet balance (includes all realized PnL)
+            perp_account_info = portfolio_data.get('perp_account_info', {})
+            assets = perp_account_info.get('assets', [])
+            perp_wallet_balance = next((float(a.get('walletBalance', 0)) for a in assets if a.get('asset') == 'USDT'), 0.0)
+
+            # Get perp unrealized PnL (if any open positions)
+            raw_perp_positions = portfolio_data.get('raw_perp_positions', [])
+            perp_unrealized_pnl = sum(float(p.get('unrealizedProfit', 0)) for p in raw_perp_positions)
+
+            # TOTAL: Spot holdings value + Perp wallet + Perp unrealized PnL
+            current_value = spot_total_value + perp_wallet_balance + perp_unrealized_pnl
+
+            logger.debug(f"Portfolio breakdown: Spot=${spot_total_value:.2f}, Perp Wallet=${perp_wallet_balance:.2f}, Perp uPnL=${perp_unrealized_pnl:.2f}, Total=${current_value:.2f}")
+
+            return current_value
+
+        except Exception as e:
+            logger.error(f"Error calculating current portfolio value: {e}", exc_info=True)
+            return None
+
+    def _calculate_total_portfolio_pnl(self, current_portfolio_value: float) -> Dict[str, Any]:
+        """
+        Calculate total portfolio PnL vs initial baseline.
+
+        Args:
+            current_portfolio_value: Current total portfolio value in USDT
+
+        Returns:
+            Dict with PnL_usd, PnL_pct, and formatted strings
+        """
+        if self.initial_portfolio_value_usdt is None or self.initial_portfolio_value_usdt == 0:
+            return {
+                'pnl_usd': 0.0,
+                'pnl_pct': 0.0,
+                'has_baseline': False
+            }
+
+        pnl_usd = current_portfolio_value - self.initial_portfolio_value_usdt
+        pnl_pct = (pnl_usd / self.initial_portfolio_value_usdt) * 100
+
+        return {
+            'pnl_usd': pnl_usd,
+            'pnl_pct': pnl_pct,
+            'has_baseline': True,
+            'initial_value': self.initial_portfolio_value_usdt,
+            'current_value': current_portfolio_value,
+            'baseline_timestamp': self.initial_portfolio_timestamp
+        }
 
     async def _discover_existing_position(self):
         """
@@ -232,10 +480,16 @@ class VolumeFarmingStrategy:
             existing_pos = dn_positions[0]
             symbol = existing_pos['symbol']
 
+            # Get entry price from raw perp position
+            raw_perp_positions = portfolio_data.get('raw_perp_positions', [])
+            perp_pos = next((p for p in raw_perp_positions if p.get('symbol') == symbol), None)
+            entry_price = float(perp_pos.get('entryPrice', 0)) if perp_pos else 0
+
             logger.info(f"{Fore.YELLOW}Discovered existing position: {symbol}{Style.RESET_ALL}")
             logger.info(f"  Spot balance: {existing_pos.get('spot_balance', 0):.6f}")
             logger.info(f"  Perp position: {existing_pos.get('perp_position', 0):.6f}")
             logger.info(f"  Position value: ${existing_pos.get('position_value_usd', 0):.2f}")
+            logger.info(f"  Entry price: ${entry_price:.4f}")
 
             # Try to fetch actual funding data from API
             funding_analysis = await self.api_manager.perform_funding_analysis(symbol)
@@ -253,7 +507,7 @@ class VolumeFarmingStrategy:
                 if start_time_str:
                     position_opened_at = datetime.strptime(start_time_str, '%Y-%m-%d %H:%M:%S')
                 else:
-                    position_opened_at = datetime.now()
+                    position_opened_at = datetime.utcnow()
 
                 logger.info(f"  Position opened: {start_time_str or 'Unknown (using now)'}")
                 logger.info(f"  Funding received: ${total_funding:.4f}")
@@ -279,6 +533,20 @@ class VolumeFarmingStrategy:
                     logger.warning(f"Could not fetch current funding rate: {rate_error}")
                     # Continue with zero rates - position will still be tracked
 
+                # Try to detect leverage from current position
+                # Get current leverage from exchange
+                try:
+                    current_leverage = await self.api_manager.get_perp_leverage(symbol)
+                    self.position_leverage = current_leverage
+                    logger.info(f"  Detected leverage from exchange: {current_leverage}x")
+                    logger.debug(f"[LEVERAGE] Position {symbol}: Detected {current_leverage}x from exchange, config is {self.leverage}x")
+                except Exception as lev_error:
+                    logger.warning(f"Could not detect leverage from exchange: {lev_error}")
+                    logger.debug(f"[LEVERAGE] Position {symbol}: Failed to detect, assuming config leverage {self.leverage}x")
+                    # Assume config leverage for discovered positions
+                    self.position_leverage = self.leverage
+                    logger.info(f"  Assuming config leverage: {self.leverage}x")
+
                 # Adopt this position
                 self.current_position = {
                     'symbol': symbol,
@@ -286,7 +554,8 @@ class VolumeFarmingStrategy:
                     'funding_rate': funding_rate,
                     'effective_apr': effective_apr,
                     'spot_qty': existing_pos.get('spot_balance', 0),
-                    'perp_qty': abs(existing_pos.get('perp_position', 0))
+                    'perp_qty': abs(existing_pos.get('perp_position', 0)),
+                    'entry_price': entry_price
                 }
                 self.position_opened_at = position_opened_at
                 self.total_funding_received = total_funding
@@ -334,6 +603,7 @@ class VolumeFarmingStrategy:
 
                 self.current_position = None
                 self.position_opened_at = None
+                self.position_leverage = None
                 self.total_funding_received = 0.0
                 self.entry_fees_paid = 0.0
                 self._save_state()
@@ -359,6 +629,7 @@ class VolumeFarmingStrategy:
                     # Clear old position and discover new one
                     self.current_position = None
                     self.position_opened_at = None
+                    self.position_leverage = None
                     self.total_funding_received = 0.0
                     self.entry_fees_paid = 0.0
                     await self._discover_existing_position()
@@ -366,6 +637,33 @@ class VolumeFarmingStrategy:
 
                 # Position matches - update funding data from exchange
                 logger.info(f"{Fore.GREEN}Position {tracked_symbol} confirmed on exchange{Style.RESET_ALL}")
+
+                # Detect and update leverage if not already set
+                if not self.position_leverage:
+                    try:
+                        current_leverage = await self.api_manager.get_perp_leverage(tracked_symbol)
+                        self.position_leverage = current_leverage
+                        logger.info(f"  Detected leverage from exchange: {current_leverage}x")
+                        logger.debug(f"[LEVERAGE] Position {tracked_symbol}: Detected {current_leverage}x from exchange during reconciliation")
+
+                        # Print mismatch warning to terminal
+                        if current_leverage != self.leverage:
+                            logger.warning(f"  Config leverage is {Fore.MAGENTA}{self.leverage}x{Style.RESET_ALL} but position is at {Fore.MAGENTA}{current_leverage}x{Style.RESET_ALL}")
+                            logger.warning(f"  Position will maintain {Fore.MAGENTA}{current_leverage}x{Style.RESET_ALL} until closed. New positions will use {Fore.MAGENTA}{self.leverage}x{Style.RESET_ALL}.")
+                            print(f"\n{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                            print(f"{Fore.YELLOW}⚠️  LEVERAGE MISMATCH DETECTED{Style.RESET_ALL}")
+                            print(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                            print(f"Config leverage:   {Fore.MAGENTA}{self.leverage}x{Style.RESET_ALL} (will apply to new positions)")
+                            print(f"Position leverage: {Fore.MAGENTA}{current_leverage}x{Style.RESET_ALL} (current {Fore.CYAN}{tracked_symbol}{Style.RESET_ALL} position)")
+                            print(f"Action:            Position will switch to {Fore.MAGENTA}{self.leverage}x{Style.RESET_ALL} at next rebalancing")
+                            print(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}\n")
+
+                        # Save the updated state with detected leverage
+                        self._save_state()
+                    except Exception as lev_error:
+                        logger.warning(f"Could not detect leverage from exchange: {lev_error}")
+                        self.position_leverage = self.leverage
+                        logger.info(f"  Assuming config leverage: {self.leverage}x")
 
                 # Fetch latest funding data from exchange (source of truth)
                 funding_analysis = await self.api_manager.perform_funding_analysis(tracked_symbol)
@@ -407,12 +705,30 @@ class VolumeFarmingStrategy:
         # Always reconcile state with exchange on startup
         await self._reconcile_position_state()
 
+        # Capture initial portfolio baseline if not already set
+        if self.initial_portfolio_value_usdt is None:
+            await self._capture_initial_portfolio()
+
         try:
             while self.running:
                 self.cycle_count += 1
-                logger.info(f"\n{'='*80}")
-                logger.info(f"CYCLE #{self.cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                logger.info(f"{'='*80}")
+                logger.info(f"\n{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+                logger.info(f"{Fore.CYAN}CYCLE #{Fore.MAGENTA}{self.cycle_count}{Fore.CYAN} - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC{Style.RESET_ALL}")
+
+                # Get and display portfolio PnL
+                current_portfolio_value = await self._get_current_portfolio_value()
+                if current_portfolio_value is not None:
+                    pnl_data = self._calculate_total_portfolio_pnl(current_portfolio_value)
+                    if pnl_data['has_baseline']:
+                        pnl_usd = pnl_data['pnl_usd']
+                        pnl_pct = pnl_data['pnl_pct']
+                        pnl_color = Fore.GREEN if pnl_usd >= 0 else Fore.RED
+                        pnl_sign = '+' if pnl_usd >= 0 else ''
+                        baseline_date = pnl_data['baseline_timestamp'].strftime('%Y-%m-%d %H:%M UTC') if pnl_data['baseline_timestamp'] else 'Unknown'
+
+                        logger.info(f"{Fore.CYAN}📊 Portfolio: {Fore.MAGENTA}${current_portfolio_value:.2f}{Fore.CYAN} | PnL: {pnl_color}{pnl_sign}${pnl_usd:.2f} ({pnl_sign}{pnl_pct:.2f}%){Fore.CYAN} | Since: {Fore.YELLOW}{baseline_date}{Style.RESET_ALL}")
+
+                logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
 
                 # Step 1: Perform health check
                 if not await self._perform_health_check():
@@ -422,12 +738,18 @@ class VolumeFarmingStrategy:
 
                 # Step 2: Check if we have an open position
                 if self.current_position:
+                    # Check if leverage setting has changed
+                    if self.position_leverage and self.position_leverage != self.leverage:
+                        logger.info(f"{Fore.YELLOW}Note: Position opened at {self.position_leverage}x leverage, config is {self.leverage}x{Style.RESET_ALL}")
+                        logger.info(f"  New leverage will apply when position is closed and reopened")
+                        logger.debug(f"[LEVERAGE] Cycle #{self.cycle_count}: Position at {self.position_leverage}x, config at {self.leverage}x - preserving position leverage")
+
                     # Monitor existing position
                     should_close = await self._should_close_position()
                     if should_close:
                         await self._close_current_position()
                     else:
-                        logger.info(f"Holding position on {self.current_position['symbol']}")
+                        logger.info(f"{Fore.CYAN}Holding position on {Fore.MAGENTA}{self.current_position['symbol']}{Style.RESET_ALL}")
                         await asyncio.sleep(self.loop_interval_seconds)
                         continue
 
@@ -462,12 +784,12 @@ class VolumeFarmingStrategy:
             True if healthy, False otherwise
         """
         try:
-            logger.info("Performing health check...")
+            logger.info(f"{Fore.CYAN}Performing health check...{Style.RESET_ALL}")
 
             # Check account balances
             portfolio_data = await self.api_manager.get_comprehensive_portfolio_data()
             if not portfolio_data:
-                logger.error("Failed to fetch portfolio data")
+                logger.error(f"{Fore.RED}Failed to fetch portfolio data{Style.RESET_ALL}")
                 return False
 
             spot_balances = portfolio_data.get('spot_balances', [])
@@ -478,15 +800,13 @@ class VolumeFarmingStrategy:
             spot_usdt = next((float(b.get('free', 0)) for b in spot_balances if b.get('asset') == 'USDT'), 0.0)
             perp_usdt = next((float(a.get('availableBalance', 0)) for a in assets if a.get('asset') == 'USDT'), 0.0)
 
-            logger.info(f"Spot USDT: ${spot_usdt:.2f}")
-            logger.info(f"Perp USDT: ${perp_usdt:.2f}")
+            logger.info(f"Spot USDT: {Fore.GREEN}${spot_usdt:.2f}{Style.RESET_ALL}")
+            logger.info(f"Perp USDT: {Fore.GREEN}${perp_usdt:.2f}{Style.RESET_ALL}")
 
             # Basic balance check - just ensure we have some USDT available
             if not self.current_position:
                 if spot_usdt + perp_usdt < 30.0:
-                    str = f"Insufficient balance. Spot: ${spot_usdt:.2f}, Perp: ${perp_usdt:.2f} (needs at least 30$ in total)"
-                    logger.error(str)
-                    logger.info(str)
+                    logger.error(f"Insufficient balance. Spot: ${spot_usdt:.2f}, Perp: ${perp_usdt:.2f} (needs at least 30$ total)")
                     return False
 
             # Check existing positions health
@@ -498,17 +818,66 @@ class VolumeFarmingStrategy:
             if health_issues:
                 logger.warning(f"Health warnings: {health_issues}")
 
-            logger.info(f"Health check passed (Existing DN positions: {dn_count})")
+            logger.info(f"{Fore.GREEN}✓ Health check passed{Style.RESET_ALL} (Existing DN positions: {Fore.CYAN}{dn_count}{Style.RESET_ALL})")
             return True
 
         except Exception as e:
             logger.error(f"Health check failed: {e}")
             return False
 
+    async def _get_24h_volumes(self) -> Dict[str, float]:
+        """
+        Fetch 24h volumes for all delta-neutral pairs.
+
+        Returns:
+            Dict mapping symbol -> total 24h volume (spot + perp) in USDT
+        """
+        try:
+            import aiohttp
+
+            if not self.api_manager.session:
+                self.api_manager.session = aiohttp.ClientSession()
+
+            session = self.api_manager.session
+
+            # Fetch spot and perp 24h ticker data concurrently
+            spot_url = "https://sapi.asterdex.com/api/v1/ticker/24hr"
+            perp_url = "https://fapi.asterdex.com/fapi/v1/ticker/24hr"
+
+            async with session.get(spot_url) as spot_resp, session.get(perp_url) as perp_resp:
+                spot_resp.raise_for_status()
+                perp_resp.raise_for_status()
+                spot_tickers = await spot_resp.json()
+                perp_tickers = await perp_resp.json()
+
+            # Build volume map
+            volumes = {}
+
+            # Add spot volumes
+            for ticker in spot_tickers:
+                symbol = ticker.get('symbol')
+                quote_volume = float(ticker.get('quoteVolume', 0))
+                if symbol:
+                    volumes[symbol] = quote_volume
+
+            # Add perp volumes
+            for ticker in perp_tickers:
+                symbol = ticker.get('symbol')
+                quote_volume = float(ticker.get('quoteVolume', 0))
+                if symbol:
+                    volumes[symbol] = volumes.get(symbol, 0) + quote_volume
+
+            return volumes
+
+        except Exception as e:
+            logger.warning(f"Could not fetch 24h volumes: {e}")
+            return {}
+
     async def _find_best_funding_opportunity(self) -> Optional[Dict[str, Any]]:
         """
         Scan all available pairs and find the best funding rate opportunity.
         Uses moving average if enabled, otherwise uses instantaneous rates.
+        Filters pairs by minimum 24h volume ($250M).
 
         Returns:
             Dict with symbol and funding rate info, or None if no opportunity
@@ -563,10 +932,30 @@ class VolumeFarmingStrategy:
                 logger.warning("No delta-neutral pairs available")
                 return None
 
+            # Fetch 24h volumes for filtering
+            volumes = await self._get_24h_volumes()
+            min_volume_threshold = 250_000_000  # $250 million
+
+            # Filter pairs by volume (keep only pairs with >= $250M 24h volume)
+            high_volume_pairs = []
+            for symbol in available_pairs:
+                volume = volumes.get(symbol, 0)
+                if volume >= min_volume_threshold:
+                    high_volume_pairs.append(symbol)
+                else:
+                    logger.debug(f"Filtered out {symbol}: 24h volume ${volume:,.0f} < ${min_volume_threshold:,.0f}")
+
+            if not high_volume_pairs:
+                logger.warning(f"No pairs meet minimum volume threshold of ${min_volume_threshold:,.0f}")
+                return None
+
+            logger.info(f"{Fore.CYAN}Volume filter: {Fore.MAGENTA}{len(high_volume_pairs)}/{len(available_pairs)}{Fore.CYAN} pairs with >= {Fore.GREEN}${min_volume_threshold/1e6:.0f}M{Fore.CYAN} volume{Style.RESET_ALL}")
+            logger.info(f"High-volume pairs: {Fore.YELLOW}{', '.join(high_volume_pairs)}{Style.RESET_ALL}")
+
             # Show ALL available pairs (including currently held position)
             all_candidates = [
                 rate for rate in funding_rates
-                if rate['symbol'] in available_pairs
+                if rate['symbol'] in high_volume_pairs
             ]
 
             if not all_candidates:
@@ -608,7 +997,18 @@ class VolumeFarmingStrategy:
                     ma_rate = f"{c['funding_rate']*100:>11.4f}"
                     eff_apr = f"{c['effective_apr']:>11.2f}"
                     stdev = f"{c.get('ma_stdev', 0)*100:>11.4f}"
-                    next_funding = str(c.get('next_funding_time', 'N/A'))[:19]
+
+                    # Format next funding time
+                    next_funding_raw = c.get('next_funding_time', 'N/A')
+                    if next_funding_raw and next_funding_raw != 'N/A':
+                        try:
+                            # Convert millisecond timestamp to UTC datetime
+                            next_funding_dt = datetime.utcfromtimestamp(int(next_funding_raw) / 1000)
+                            next_funding = next_funding_dt.strftime('%Y-%m-%d %H:%M UTC')
+                        except (ValueError, TypeError):
+                            next_funding = 'N/A'
+                    else:
+                        next_funding = 'N/A'
 
                     logger.info(f"{color}{symbol_display} {ma_rate} {eff_apr} {stdev} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
             else:
@@ -635,7 +1035,18 @@ class VolumeFarmingStrategy:
                     symbol_display = f"{c['symbol']:<12}"
                     rate = f"{c['funding_rate']*100:>11.4f}"
                     eff_apr = f"{c['effective_apr']:>11.2f}"
-                    next_funding = str(c.get('next_funding_time', 'N/A'))[:19]
+
+                    # Format next funding time
+                    next_funding_raw = c.get('next_funding_time', 'N/A')
+                    if next_funding_raw and next_funding_raw != 'N/A':
+                        try:
+                            # Convert millisecond timestamp to UTC datetime
+                            next_funding_dt = datetime.utcfromtimestamp(int(next_funding_raw) / 1000)
+                            next_funding = next_funding_dt.strftime('%Y-%m-%d %H:%M UTC')
+                        except (ValueError, TypeError):
+                            next_funding = 'N/A'
+                    else:
+                        next_funding = 'N/A'
 
                     logger.info(f"{color}{symbol_display} {rate} {eff_apr} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
 
@@ -670,20 +1081,38 @@ class VolumeFarmingStrategy:
         """
         try:
             symbol = opportunity['symbol']
-            logger.info(f"Opening position on {symbol}...")
+            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+            logger.info(f"{Fore.YELLOW}Opening position on {Fore.MAGENTA}{symbol}{Fore.YELLOW}...{Style.RESET_ALL}")
+            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+
+            # Set leverage on the exchange for this symbol
+            logger.info(f"Setting leverage to {Fore.MAGENTA}{self.leverage}x{Style.RESET_ALL} on {Fore.CYAN}{symbol}{Style.RESET_ALL}...")
+            logger.debug(f"[LEVERAGE] Opening new position {symbol}: Setting leverage to {self.leverage}x on exchange")
+            try:
+                leverage_set = await self.api_manager.set_leverage(symbol, self.leverage)
+                if leverage_set:
+                    logger.info(f"{Fore.GREEN}Leverage set to {self.leverage}x successfully{Style.RESET_ALL}")
+                    logger.debug(f"[LEVERAGE] Successfully set {symbol} leverage to {self.leverage}x")
+                else:
+                    logger.warning(f"Failed to set leverage to {self.leverage}x, continuing anyway...")
+                    logger.debug(f"[LEVERAGE] Failed to set {symbol} leverage to {self.leverage}x (API returned False)")
+            except Exception as leverage_error:
+                logger.warning(f"Failed to set leverage: {leverage_error}")
+                logger.warning("Continuing with current leverage setting...")
+                logger.debug(f"[LEVERAGE] Exception setting {symbol} leverage: {leverage_error}", exc_info=True)
 
             # Rebalance USDT before opening to maximize available capital
-            logger.info("Rebalancing USDT before opening position...")
+            logger.info(f"Rebalancing USDT for {self.leverage}x leverage before opening position...")
             try:
-                rebalance_result = await self.api_manager.rebalance_usdt_50_50()
+                rebalance_result = await self.api_manager.rebalance_usdt_by_leverage(self.leverage)
                 if rebalance_result.get('transfer_needed'):
                     direction = rebalance_result.get('transfer_direction')
                     amount = rebalance_result.get('transfer_amount', 0)
                     logger.info(f"{Fore.GREEN}Rebalanced ${amount:.2f} USDT ({direction}){Style.RESET_ALL}")
-                    logger.info(f"  Spot USDT: ${rebalance_result.get('current_spot_usdt', 0):.2f} -> ${rebalance_result.get('target_each', 0):.2f}")
-                    logger.info(f"  Perp USDT: ${rebalance_result.get('current_perp_usdt', 0):.2f} -> ${rebalance_result.get('target_each', 0):.2f}")
+                    logger.info(f"  Spot USDT: ${rebalance_result.get('current_spot_usdt', 0):.2f} -> ${rebalance_result.get('target_spot_usdt', 0):.2f} ({rebalance_result.get('spot_target_pct', 0):.1f}%)")
+                    logger.info(f"  Perp USDT: ${rebalance_result.get('current_perp_usdt', 0):.2f} -> ${rebalance_result.get('target_perp_usdt', 0):.2f} ({rebalance_result.get('perp_target_pct', 0):.1f}%)")
                 else:
-                    logger.info("USDT wallets already balanced (difference < $1)")
+                    logger.info(f"USDT wallets already balanced for {self.leverage}x leverage (difference < $1)")
             except Exception as rebalance_error:
                 logger.warning(f"Failed to rebalance USDT: {rebalance_error}")
                 logger.warning("Continuing with current balances...")
@@ -701,25 +1130,48 @@ class VolumeFarmingStrategy:
             spot_usdt = next((float(b.get('free', 0)) for b in spot_balances if b.get('asset') == 'USDT'), 0.0)
             perp_usdt = next((float(a.get('availableBalance', 0)) for a in assets if a.get('asset') == 'USDT'), 0.0)
 
-            # After rebalancing, both should be equal (or close), use minimum to be safe
-            available_capital = min(spot_usdt, perp_usdt)
+            # Calculate maximum position size based on leverage and available balances
+            # With leverage, we need to find the limiting factor between spot and perp wallets
+            #
+            # For a position of notional value N:
+            # - Spot side needs: N worth of USDT to buy base asset
+            # - Perp side needs: N / leverage worth of USDT as margin
+            #
+            # Therefore:
+            # - Max position from spot wallet: spot_usdt
+            # - Max position from perp wallet: perp_usdt * leverage
+            #
+            # The actual max position is the minimum of these two
+
+            max_position_from_spot = spot_usdt
+            max_position_from_perp = perp_usdt * self.leverage
+
+            # The limiting factor determines max position size
+            max_position_size = min(max_position_from_spot, max_position_from_perp)
 
             # Apply capital fraction
-            capital_to_deploy = available_capital * self.capital_fraction
+            capital_to_deploy = max_position_size * self.capital_fraction
+
+            logger.info(f"{Fore.CYAN}Wallet balances:{Style.RESET_ALL}")
+            logger.info(f"  Spot USDT: {Fore.GREEN}${spot_usdt:.2f}{Style.RESET_ALL} (max position: {Fore.MAGENTA}${max_position_from_spot:.2f}{Style.RESET_ALL})")
+            logger.info(f"  Perp USDT: {Fore.GREEN}${perp_usdt:.2f}{Style.RESET_ALL} (max position: {Fore.MAGENTA}${max_position_from_perp:.2f}{Style.RESET_ALL} at {Fore.CYAN}{self.leverage}x{Style.RESET_ALL})")
+            limiting_factor = 'SPOT' if max_position_from_spot < max_position_from_perp else 'PERP'
+            logger.info(f"  Limiting factor: {Fore.YELLOW}{limiting_factor}{Style.RESET_ALL}")
 
             # Basic validation - ensure we have some capital
             if capital_to_deploy < 1.0:
-                logger.error(f"Insufficient capital to deploy. Available: ${available_capital:.2f}, Deploying: ${capital_to_deploy:.2f}")
+                logger.error(f"Insufficient capital to deploy. Max position: ${max_position_size:.2f}, Deploying: ${capital_to_deploy:.2f}")
                 logger.error(f"  Spot USDT: ${spot_usdt:.2f}")
                 logger.error(f"  Perp USDT: ${perp_usdt:.2f}")
                 return
 
-            logger.info(f"Capital to deploy: ${capital_to_deploy:.2f} ({self.capital_fraction*100:.0f}% of ${available_capital:.2f})")
+            logger.info(f"Capital to deploy: {Fore.MAGENTA}${capital_to_deploy:.2f}{Style.RESET_ALL} ({Fore.CYAN}{self.capital_fraction*100:.0f}%{Style.RESET_ALL} of max {Fore.MAGENTA}${max_position_size:.2f}{Style.RESET_ALL} at {Fore.CYAN}{self.leverage}x{Style.RESET_ALL} leverage)")
 
             # Execute the trade
             result = await self.api_manager.prepare_and_execute_dn_position(
                 symbol=symbol,
-                capital_to_deploy=capital_to_deploy
+                capital_to_deploy=capital_to_deploy,
+                leverage=self.leverage
             )
 
             if result.get('success'):
@@ -738,17 +1190,23 @@ class VolumeFarmingStrategy:
                     'funding_rate': opportunity['funding_rate'],
                     'effective_apr': opportunity['effective_apr'],
                     'spot_qty': spot_qty,
-                    'perp_qty': perp_qty
+                    'perp_qty': perp_qty,
+                    'entry_price': spot_price  # Save entry price for PnL calculations
                 }
-                self.position_opened_at = datetime.now()
+                self.position_opened_at = datetime.utcnow()
+                self.position_leverage = self.leverage  # Track leverage used for this position
                 self.total_funding_received = 0.0
                 self.total_positions_opened += 1
 
-                logger.info(f"{Fore.GREEN}Position opened successfully!{Style.RESET_ALL}")
-                logger.info(f"  Entry fees: ${self.entry_fees_paid:.2f}")
-                logger.info(f"  Spot qty: {spot_qty:.8f}")
-                logger.info(f"  Perp qty: {perp_qty:.8f}")
-                logger.info(f"  Total positions opened: {self.total_positions_opened}")
+                logger.info(f"{Fore.GREEN}{'='*80}{Style.RESET_ALL}")
+                logger.info(f"{Fore.GREEN}✓ Position opened successfully!{Style.RESET_ALL}")
+                logger.info(f"{Fore.GREEN}{'='*80}{Style.RESET_ALL}")
+                logger.info(f"  Leverage: {Fore.MAGENTA}{self.position_leverage}x{Style.RESET_ALL}")
+                logger.info(f"  Entry fees: {Fore.YELLOW}${self.entry_fees_paid:.2f}{Style.RESET_ALL}")
+                logger.info(f"  Spot qty: {Fore.CYAN}{spot_qty:.8f}{Style.RESET_ALL}")
+                logger.info(f"  Perp qty: {Fore.CYAN}{perp_qty:.8f}{Style.RESET_ALL}")
+                logger.info(f"  Total positions opened: {Fore.MAGENTA}{self.total_positions_opened}{Style.RESET_ALL}")
+                logger.debug(f"[LEVERAGE] Position {symbol} opened at {self.position_leverage}x leverage (saved to state)")
 
                 # Save state immediately after opening
                 self._save_state()
@@ -777,7 +1235,7 @@ class VolumeFarmingStrategy:
 
         try:
             symbol = self.current_position['symbol']
-            logger.info(f"Evaluating position on {symbol}...")
+            logger.info(f"{Fore.CYAN}Evaluating position on {Fore.MAGENTA}{symbol}{Fore.CYAN}...{Style.RESET_ALL}")
 
             # Get current position data
             portfolio_data = await self.api_manager.get_comprehensive_portfolio_data()
@@ -793,15 +1251,63 @@ class VolumeFarmingStrategy:
             # Check 1: Emergency stop loss
             perp_pos = next((p for p in raw_perp_positions if p.get('symbol') == symbol), None)
             if perp_pos:
-                unrealized_pnl = float(perp_pos.get('unrealizedProfit', 0))
+                perp_unrealized_pnl = float(perp_pos.get('unrealizedProfit', 0))
                 entry_value = self.current_position.get('capital', 1)
-                pnl_pct = (unrealized_pnl / entry_value) * 100 if entry_value > 0 else 0
+                perp_pnl_pct = (perp_unrealized_pnl / entry_value) * 100 if entry_value > 0 else 0
 
-                if pnl_pct <= self.emergency_stop_loss_pct:
-                    logger.error(f"Emergency stop loss triggered! PnL: {pnl_pct:.2f}%")
+                # Calculate spot unrealized PnL
+                spot_unrealized_pnl = 0.0
+                combined_unrealized_pnl = perp_unrealized_pnl
+                combined_pnl_pct = perp_pnl_pct
+
+                if perp_pos.get('markPrice'):
+                    mark_price = float(perp_pos['markPrice'])
+                    spot_balance = position_data.get('spot_balance', 0)
+
+                    # Get entry price from position state, or fallback to perp entry price
+                    entry_price = self.current_position.get('entry_price', 0)
+                    if entry_price == 0:
+                        # Fallback: use perp entry price (same for both spot and perp in DN strategy)
+                        entry_price = float(perp_pos.get('entryPrice', 0))
+                        # Update state with entry price for future use
+                        if entry_price > 0:
+                            self.current_position['entry_price'] = entry_price
+                            self._save_state()
+
+                    if entry_price > 0 and spot_balance > 0:
+                        # Spot PnL = current_qty * (current_price - entry_price)
+                        spot_unrealized_pnl = spot_balance * (mark_price - entry_price)
+
+                    # Combined DN PnL (includes funding and fees)
+                    # = Spot PnL + Perp PnL + Funding Received - Entry Fees - Exit Fees
+                    position_value = self.current_position.get('capital', 0)
+                    exit_fees_estimate = position_value * 0.001  # 0.1% total exit fees
+
+                    combined_unrealized_pnl = (
+                        spot_unrealized_pnl +
+                        perp_unrealized_pnl +
+                        self.total_funding_received -
+                        self.entry_fees_paid -
+                        exit_fees_estimate
+                    )
+                    combined_pnl_pct = (combined_unrealized_pnl / entry_value) * 100 if entry_value > 0 else 0
+
+                # Emergency stop loss check (use perp PnL for trigger as it's more volatile)
+                if perp_pnl_pct <= self.emergency_stop_loss_pct:
+                    logger.error(f"{Fore.RED}{'='*80}{Style.RESET_ALL}")
+                    logger.error(f"{Fore.RED}⚠️  EMERGENCY STOP LOSS TRIGGERED!{Style.RESET_ALL}")
+                    logger.error(f"{Fore.RED}Perp PnL: {perp_pnl_pct:.2f}% (threshold: {self.emergency_stop_loss_pct}%){Style.RESET_ALL}")
+                    logger.error(f"{Fore.RED}{'='*80}{Style.RESET_ALL}")
                     return True
 
-                logger.info(f"  Unrealized PnL: ${unrealized_pnl:.2f} ({pnl_pct:.2f}%)")
+                # Log all PnL components with color coding
+                perp_pnl_color = Fore.GREEN if perp_unrealized_pnl >= 0 else Fore.RED
+                spot_pnl_color = Fore.GREEN if spot_unrealized_pnl >= 0 else Fore.RED
+                combined_pnl_color = Fore.GREEN if combined_unrealized_pnl >= 0 else Fore.RED
+
+                logger.info(f"  Perp Unrealized PnL: {perp_pnl_color}${perp_unrealized_pnl:.2f} ({perp_pnl_pct:.2f}%){Style.RESET_ALL} -> used for stoploss trigger at {Fore.RED}{self.emergency_stop_loss_pct}%{Style.RESET_ALL}")
+                logger.info(f"  Spot Unrealized PnL: {spot_pnl_color}${spot_unrealized_pnl:.2f}{Style.RESET_ALL}")
+                logger.info(f"  Combined DN PnL (net): {combined_pnl_color}${combined_unrealized_pnl:.2f} ({combined_pnl_pct:.2f}%){Style.RESET_ALL} {Fore.YELLOW}[includes funding & fees]{Style.RESET_ALL}")
 
                 # Calculate and log delta-neutral position size
                 if perp_pos.get('markPrice'):
@@ -811,8 +1317,8 @@ class VolumeFarmingStrategy:
                     perp_notional = abs(float(perp_pos.get('notional', 0)))
 
                     # Per user request: size = spot_notional + abs(perp_notional) + unrealized_pnl
-                    total_dn_size = spot_notional + perp_notional + unrealized_pnl
-                    logger.info(f"  Delta-neutral position size: ${total_dn_size:.2f} (Spot: ${spot_notional:.2f}, Perp: ${perp_notional:.2f}, PnL: ${unrealized_pnl:.2f})")
+                    total_dn_size = spot_notional + perp_notional + perp_unrealized_pnl
+                    logger.info(f"  Delta-neutral position size: {Fore.MAGENTA}${total_dn_size:.2f}{Style.RESET_ALL} (Spot: {Fore.CYAN}${spot_notional:.2f}{Style.RESET_ALL}, Perp: {Fore.CYAN}${perp_notional:.2f}{Style.RESET_ALL})")
 
             # Check 2: Calculate funding received
             # Try to fetch actual funding from API first, fallback to estimate
@@ -833,7 +1339,7 @@ class VolumeFarmingStrategy:
                 logger.error("Position opened time is None, cannot calculate age")
                 return True  # Close position if we can't track it properly
 
-            time_elapsed = datetime.now() - self.position_opened_at
+            time_elapsed = datetime.utcnow() - self.position_opened_at
             hours_elapsed = time_elapsed.total_seconds() / 3600
             funding_periods_elapsed = hours_elapsed / 8  # Funding every 8 hours
 
@@ -852,10 +1358,10 @@ class VolumeFarmingStrategy:
 
             fees_coverage_ratio = self.total_funding_received / total_fees if total_fees > 0 else 0
 
-            logger.info(f"  Position age: {hours_elapsed:.2f} hours")
-            logger.info(f"  Funding periods: {funding_periods_elapsed:.2f}")
-            logger.info(f"  Estimated funding received: ${self.total_funding_received:.4f}")
-            logger.info(f"  Total fees (entry + exit): ${total_fees:.4f}")
+            logger.info(f"  Position age: {Fore.CYAN}{hours_elapsed:.2f} hours{Style.RESET_ALL} (since {Fore.YELLOW}{self.position_opened_at.strftime('%Y-%m-%d %H:%M:%S')} UTC{Style.RESET_ALL})")
+            logger.info(f"  Funding periods: {Fore.CYAN}{funding_periods_elapsed:.2f}{Style.RESET_ALL}")
+            logger.info(f"  Estimated funding received: {Fore.GREEN}${self.total_funding_received:.4f}{Style.RESET_ALL}")
+            logger.info(f"  Total fees (entry + exit): {Fore.YELLOW}${total_fees:.4f}{Style.RESET_ALL}")
 
             # Progress bar for fees coverage
             progress = min(fees_coverage_ratio / self.fee_coverage_multiplier, 1.0)
@@ -864,9 +1370,17 @@ class VolumeFarmingStrategy:
             bar = '█' * filled_length + '-' * (bar_length - filled_length)
             progress_percentage = progress * 100
 
+            # Color the bar based on progress
+            if progress >= 1.0:
+                bar_color = Fore.GREEN
+            elif progress >= 0.75:
+                bar_color = Fore.YELLOW
+            else:
+                bar_color = Fore.CYAN
+
             progress_bar_message = (
-                f"  Fees coverage: [{Fore.GREEN}{bar}{Style.RESET_ALL}] {progress_percentage:.1f}% "
-                f"({fees_coverage_ratio:.2f}x / {self.fee_coverage_multiplier}x)"
+                f"  Fees coverage: [{bar_color}{bar}{Style.RESET_ALL}] {Fore.MAGENTA}{progress_percentage:.1f}%{Style.RESET_ALL} "
+                f"({Fore.CYAN}{fees_coverage_ratio:.2f}x{Style.RESET_ALL} / {Fore.GREEN}{self.fee_coverage_multiplier}x{Style.RESET_ALL})"
             )
             logger.info(progress_bar_message)
 
@@ -883,12 +1397,12 @@ class VolumeFarmingStrategy:
 
                 # Only rotate if improvement is > 10% APR points AND we've held for at least 4 hours
                 if apr_improvement > 10.0 and hours_elapsed >= 4.0:
-                    logger.info(f"{Fore.YELLOW}Better opportunity found: {current_best['symbol']} ({new_apr:.2f}% vs {current_apr:.2f}%){Style.RESET_ALL}")
+                    logger.info(f"{Fore.YELLOW}Better opportunity found: {Fore.MAGENTA}{current_best['symbol']}{Style.RESET_ALL} ({Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} vs {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}) - improvement: {Fore.GREEN}+{apr_improvement:.2f}%{Style.RESET_ALL}")
                     return True
 
             # Check 4: Position age exceeded
             if time_elapsed > self.max_position_age:
-                logger.warning(f"Position age exceeded {self.max_position_age.total_seconds()/3600:.1f} hours")
+                logger.warning(f"{Fore.YELLOW}Position age exceeded {Fore.MAGENTA}{self.max_position_age.total_seconds()/3600:.1f}{Fore.YELLOW} hours - rotating...{Style.RESET_ALL}")
                 return True
 
             # Check 5: Health issues
@@ -919,7 +1433,9 @@ class VolumeFarmingStrategy:
 
         try:
             symbol = self.current_position['symbol']
-            logger.info(f"Closing position on {symbol}...")
+            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+            logger.info(f"{Fore.YELLOW}Closing position on {Fore.MAGENTA}{symbol}{Fore.YELLOW}...{Style.RESET_ALL}")
+            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
 
             result = await self.api_manager.execute_dn_position_close(symbol)
 
@@ -929,34 +1445,50 @@ class VolumeFarmingStrategy:
                 self.total_profit_loss += net_profit
                 self.total_positions_closed += 1
 
-                logger.info(f"{Fore.GREEN}Position closed successfully!{Style.RESET_ALL}")
-                logger.info(f"  Total funding received: ${self.total_funding_received:.4f}")
-                logger.info(f"  Total fees paid: ${self.entry_fees_paid:.4f}")
-                logger.info(f"  Net profit (this position): ${net_profit:.4f}")
-                logger.info(f"  Cumulative P/L: ${self.total_profit_loss:.4f}")
-                logger.info(f"  Total positions closed: {self.total_positions_closed}")
+                logger.info(f"{Fore.GREEN}{'='*80}{Style.RESET_ALL}")
+                logger.info(f"{Fore.GREEN}✓ Position closed successfully!{Style.RESET_ALL}")
+                logger.info(f"{Fore.GREEN}{'='*80}{Style.RESET_ALL}")
+                logger.info(f"  Total funding received: {Fore.GREEN}${self.total_funding_received:.4f}{Style.RESET_ALL}")
+                logger.info(f"  Total fees paid: {Fore.YELLOW}${self.entry_fees_paid:.4f}{Style.RESET_ALL}")
+
+                net_profit_color = Fore.GREEN if net_profit >= 0 else Fore.RED
+                logger.info(f"  Net profit (this position): {net_profit_color}${net_profit:.4f}{Style.RESET_ALL}")
+
+                cumulative_pnl_color = Fore.GREEN if self.total_profit_loss >= 0 else Fore.RED
+                logger.info(f"  Cumulative P/L: {cumulative_pnl_color}${self.total_profit_loss:.4f}{Style.RESET_ALL}")
+                logger.info(f"  Total positions closed: {Fore.MAGENTA}{self.total_positions_closed}{Style.RESET_ALL}")
 
                 # Reset position tracking
+                closed_symbol = symbol
+                closed_leverage = self.position_leverage
                 self.current_position = None
                 self.position_opened_at = None
+                self.position_leverage = None
                 self.total_funding_received = 0.0
                 self.entry_fees_paid = 0.0
 
                 # Save state immediately after closing
                 self._save_state()
+                logger.debug(f"[LEVERAGE] Position {closed_symbol} closed (was at {closed_leverage}x leverage)")
 
-                # Automatically rebalance USDT 50/50 between spot and perp
-                logger.info("Rebalancing USDT between spot and perp wallets...")
+                # Automatically rebalance USDT based on NEW config leverage (for next position)
+                # This allows leverage changes to take effect after closing current position
+                if closed_leverage and closed_leverage != self.leverage:
+                    logger.info(f"Leverage changed from {closed_leverage}x to {self.leverage}x - rebalancing for new positions")
+                    logger.debug(f"[LEVERAGE] Transitioning from {closed_leverage}x to {self.leverage}x leverage")
+
+                logger.info(f"Rebalancing USDT for {self.leverage}x leverage (next position) between spot and perp wallets...")
+                logger.debug(f"[LEVERAGE] Rebalancing USDT for {self.leverage}x leverage (next position will use this)")
                 try:
-                    rebalance_result = await self.api_manager.rebalance_usdt_50_50()
+                    rebalance_result = await self.api_manager.rebalance_usdt_by_leverage(self.leverage)
                     if rebalance_result.get('transfer_needed'):
                         direction = rebalance_result.get('transfer_direction')
                         amount = rebalance_result.get('transfer_amount', 0)
                         logger.info(f"{Fore.GREEN}Rebalanced ${amount:.2f} USDT ({direction}){Style.RESET_ALL}")
-                        logger.info(f"  Spot USDT: ${rebalance_result.get('current_spot_usdt', 0):.2f} -> ${rebalance_result.get('target_each', 0):.2f}")
-                        logger.info(f"  Perp USDT: ${rebalance_result.get('current_perp_usdt', 0):.2f} -> ${rebalance_result.get('target_each', 0):.2f}")
+                        logger.info(f"  Spot USDT: ${rebalance_result.get('current_spot_usdt', 0):.2f} -> ${rebalance_result.get('target_spot_usdt', 0):.2f} ({rebalance_result.get('spot_target_pct', 0):.1f}%)")
+                        logger.info(f"  Perp USDT: ${rebalance_result.get('current_perp_usdt', 0):.2f} -> ${rebalance_result.get('target_perp_usdt', 0):.2f} ({rebalance_result.get('perp_target_pct', 0):.1f}%)")
                     else:
-                        logger.info("USDT wallets already balanced (difference < $1)")
+                        logger.info(f"USDT wallets already balanced for {self.leverage}x leverage (difference < $1)")
                 except Exception as rebalance_error:
                     logger.warning(f"Failed to rebalance USDT: {rebalance_error}")
                     logger.warning("Continuing anyway - you may want to manually rebalance")
@@ -968,26 +1500,31 @@ class VolumeFarmingStrategy:
 
     async def _shutdown(self):
         """Graceful shutdown with position cleanup."""
-        logger.info("Shutting down strategy...")
+        logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+        logger.info(f"{Fore.CYAN}Shutting down strategy...{Style.RESET_ALL}")
+        logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
 
         # Save final state before shutdown
         self._save_state()
-        logger.info(f"Final state saved to {self.state_file}")
+        logger.info(f"{Fore.GREEN}Final state saved to {self.state_file}{Style.RESET_ALL}")
 
         # Close any open positions (optional - user can choose to keep them open)
         if self.current_position:
-            logger.warning(f"Open position on {self.current_position['symbol']} will remain open")
-            logger.warning("State has been saved. Restart the strategy to continue monitoring.")
+            logger.warning(f"{Fore.YELLOW}Open position on {self.current_position['symbol']} will remain open{Style.RESET_ALL}")
+            logger.warning(f"{Fore.YELLOW}State has been saved. Restart the strategy to continue monitoring.{Style.RESET_ALL}")
             logger.info("To force-close on shutdown, modify the code in _shutdown()")
 
         # Close API connections
         await self.api_manager.close()
 
-        logger.info(f"Strategy completed {self.cycle_count} cycles")
-        logger.info(f"Total positions opened: {self.total_positions_opened}")
-        logger.info(f"Total positions closed: {self.total_positions_closed}")
-        logger.info(f"Cumulative P/L: ${self.total_profit_loss:.4f}")
-        logger.info("Shutdown complete")
+        logger.info(f"{Fore.CYAN}Strategy completed {Fore.MAGENTA}{self.cycle_count}{Fore.CYAN} cycles{Style.RESET_ALL}")
+        logger.info(f"Total positions opened: {Fore.MAGENTA}{self.total_positions_opened}{Style.RESET_ALL}")
+        logger.info(f"Total positions closed: {Fore.MAGENTA}{self.total_positions_closed}{Style.RESET_ALL}")
+
+        cumulative_pnl_color = Fore.GREEN if self.total_profit_loss >= 0 else Fore.RED
+        logger.info(f"Cumulative P/L: {cumulative_pnl_color}${self.total_profit_loss:.4f}{Style.RESET_ALL}")
+
+        logger.info(f"{Fore.GREEN}Shutdown complete{Style.RESET_ALL}")
 
 
 def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dict[str, Any]:
@@ -1006,9 +1543,9 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
         'fee_coverage_multiplier': 1.5,
         'loop_interval_seconds': 300,
         'max_position_age_hours': 24,
-        'emergency_stop_loss_pct': -10.0,
         'use_funding_ma': True,
-        'funding_ma_periods': 10
+        'funding_ma_periods': 10,
+        'leverage': 1
     }
 
     if not os.path.exists(config_file):
@@ -1041,10 +1578,22 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
             config['max_position_age_hours'] = pm.get('max_position_age_hours', config['max_position_age_hours'])
             config['loop_interval_seconds'] = pm.get('loop_interval_seconds', config['loop_interval_seconds'])
 
-        # Risk management
-        if 'risk_management' in config_data:
+        # Leverage settings (support both old 'risk_management' and new 'leverage_settings' for backward compatibility)
+        if 'leverage_settings' in config_data:
+            ls = config_data['leverage_settings']
+            config['leverage'] = ls.get('leverage', config['leverage'])
+        elif 'risk_management' in config_data:
+            # Backward compatibility with old config format
             rm = config_data['risk_management']
-            config['emergency_stop_loss_pct'] = rm.get('emergency_stop_loss_pct', config['emergency_stop_loss_pct'])
+            config['leverage'] = rm.get('leverage', config['leverage'])
+            logger.info("Note: 'risk_management' section is deprecated, use 'leverage_settings' instead")
+
+        # Validate leverage
+        if config['leverage'] < 1 or config['leverage'] > 3:
+            logger.warning(f"Invalid leverage {config['leverage']} in config, must be 1-3. Using default: 1")
+            config['leverage'] = 1
+
+        # Note: emergency_stop_loss_pct is now calculated automatically based on leverage
 
         logger.info(f"Configuration loaded from {config_file}")
         return config
@@ -1078,9 +1627,9 @@ async def main():
         fee_coverage_multiplier=config['fee_coverage_multiplier'],
         loop_interval_seconds=config['loop_interval_seconds'],
         max_position_age_hours=config['max_position_age_hours'],
-        emergency_stop_loss_pct=config['emergency_stop_loss_pct'],
         use_funding_ma=config['use_funding_ma'],
-        funding_ma_periods=config['funding_ma_periods']
+        funding_ma_periods=config['funding_ma_periods'],
+        leverage=config['leverage']
     )
 
     try:
@@ -1093,5 +1642,4 @@ async def main():
 
 
 if __name__ == '__main__':
-
     asyncio.run(main())

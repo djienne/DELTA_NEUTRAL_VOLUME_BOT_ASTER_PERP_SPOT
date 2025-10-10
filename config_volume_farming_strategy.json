@@ -3,12 +3,12 @@
   "_description": "Default configuration for automated delta-neutral funding rate farming",
 
   "capital_management": {
-    "capital_fraction": 0.50,
+    "capital_fraction": 0.98,
     "_comment_fraction": "Fraction of total available USDT to deploy per position (0.95 = 95%, keeps 5% buffer)"
   },
 
   "funding_rate_strategy": {
-    "min_funding_apr": 7.0,
+    "min_funding_apr": 5.4,
     "use_funding_ma": true,
     "funding_ma_periods": 10,
     "_comment_apr": "Minimum effective APR (%) to consider opening a position",
@@ -16,32 +16,17 @@
   },
 
   "position_management": {
-    "fee_coverage_multiplier": 1.8,
+    "fee_coverage_multiplier": 1.1,
     "max_position_age_hours": 336,
-    "loop_interval_seconds": 900,
+    "loop_interval_seconds": 300,
     "_comment_fee_coverage": "Close when funding received >= this multiplier × total fees (1.5 = 150%). Some margin to also cover spreads.",
     "_comment_max_age": "Maximum hours to hold a position before forcing rotation",
     "_comment_check_interval": "Seconds between position evaluation cycles (300 = 5 minutes)"
   },
 
-  "risk_management": {
-    "emergency_stop_loss_pct": -50.0,
-    "_comment_stop_loss": "Emergency stop loss percentage of the short position (negative value, -50.0 = -50%)"
-  },
-
-  "_notes": {
-    "config_file": "Configuration for volume farming strategy. Edit values to customize behavior.",
-    "capital_fraction": "Fraction of available USDT to deploy per position (0.95 = 95%, keeps 5% buffer). Higher = more capital utilization. Bot rebalances USDT 50/50 before opening positions.",
-    "funding_ma_periods": "Higher periods = more stable but slower to react. 3-5: responsive, 10-15: balanced, 20+: very stable",
-    "fee_coverage": "1.5x recommended to ensure profit after fees. Lower = faster rotation, higher = better profits per trade",
-    "stop_loss": "Emergency protection against extreme price movements. Should be negative value."
-  },
-
-  "_troubleshooting": {
-    "no_positions_opening": "Check min_funding_apr - may be too high. Try lowering to 10-15%",
-    "too_many_rotations": "Increase fee_coverage_multiplier or max_position_age_hours",
-    "not_enough_volume": "Lower fee_coverage_multiplier, lower max_position_age_hours",
-    "losing_money": "Check emergency_stop_loss_pct, increase fee_coverage_multiplier",
-    "bot_not_finding_position": "Delete volume_farming_state.json, bot will rediscover from exchange"
+  "leverage_settings": {
+    "leverage": 3,
+    "_comment_leverage": "Leverage for perpetual positions (1-3). 1=50/50 split, 2=1/3 perp 2/3 spot, 3=1/4 perp 3/4 spot. Higher leverage = more capital efficiency.",
+    "_comment_stop_loss": "Emergency stop-loss is calculated AUTOMATICALLY based on leverage with 0.7% safety buffer to prevent liquidation. For 1x: -50%, 2x: -33%, 3x: -24%"
   }
 }
