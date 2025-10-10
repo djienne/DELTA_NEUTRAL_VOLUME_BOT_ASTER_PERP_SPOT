@@ -18,7 +18,10 @@ The bot operates in a continuous loop:
     *   A better funding rate opportunity is found.
     *   Maximum position age is reached.
     *   Emergency stop-loss is triggered.
-3.  **Opportunity Scanning**: If no position is open, it scans all delta-neutral pairs for the most profitable and stable funding rate APR.
+3.  **Opportunity Scanning**: If no position is open, it scans all delta-neutral pairs for the most profitable and stable funding rate APR, filtering out:
+    *   Pairs with negative current funding rates (even if MA is positive).
+    *   Pairs with < $250M 24h trading volume.
+    *   Pairs with APR below the configured minimum threshold.
 4.  **Open Position**: Automatically calculates position size, rebalances USDT between spot and perpetual wallets, and executes trades to open a new delta-neutral position (long spot, short perpetuals).
 5.  **Repeat**: Saves its state and repeats the cycle.
 
@@ -31,6 +34,7 @@ The bot operates in a continuous loop:
 -   **MA Filtering**: Uses a funding rate moving average to avoid volatile, short-lived opportunities.
 -   **Dynamic Pair Discovery**: Automatically finds all tradable delta-neutral pairs.
 -   **Volume Filtering**: Only trades pairs with ≥ $250M 24h volume to ensure sufficient liquidity and minimize slippage.
+-   **Negative Rate Filtering**: Automatically excludes pairs with negative current funding rates, even if their MA is positive.
 -   **State Persistence**: Resumes seamlessly from `volume_farming_state.json` after restarts.
 -   **Configurable**: Tune all parameters via `config_volume_farming_strategy.json`.
 -   **Risk Management**: Includes automatic stop-loss calculation, health checks, and leverage management.
@@ -60,15 +64,15 @@ python check_funding_rates.py
 This script displays:
 -   **Current funding rates (APR)** for all delta-neutral pairs
 -   **24h trading volume** for each pair
--   **Pairs meeting volume requirements** (≥ $250M 24h volume)
--   **Pairs filtered out** by insufficient volume
+-   **Pairs meeting requirements** (≥ $250M volume AND positive current funding rate)
+-   **Pairs filtered out** by insufficient volume or negative rates
 -   **Summary statistics** including best opportunity
 
 This is useful for:
 -   Understanding which pairs are eligible for trading
 -   Identifying the most profitable funding rate opportunities
--   Monitoring volume requirements before starting the bot
--   Debugging why certain pairs aren't being traded
+-   Monitoring volume and funding rate requirements before starting the bot
+-   Debugging why certain pairs aren't being traded (negative rates, low volume, etc.)
 
 ### Emergency Exit
 

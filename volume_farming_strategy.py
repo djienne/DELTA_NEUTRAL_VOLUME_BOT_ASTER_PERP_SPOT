@@ -878,7 +878,7 @@ class VolumeFarmingStrategy:
         """
         Scan all available pairs and find the best funding rate opportunity.
         Uses moving average if enabled, otherwise uses instantaneous rates.
-        Filters pairs by minimum 24h volume ($250M).
+        Filters pairs by minimum 24h volume ($250M) and negative current funding rates.
 
         Returns:
             Dict with symbol and funding rate info, or None if no opportunity
@@ -889,6 +889,21 @@ class VolumeFarmingStrategy:
             else:
                 logger.info("Scanning for best funding rate opportunity (instantaneous)...")
 
+            # ALWAYS fetch current funding rates first to filter negative rates
+            current_funding_rates_data = await self.api_manager.get_all_funding_rates()
+            if not current_funding_rates_data:
+                logger.warning("No current funding rates available")
+                return None
+
+            # Build map of symbol -> current rate for filtering
+            current_rates_map = {
+                rate_data['symbol']: rate_data['rate']
+                for rate_data in current_funding_rates_data
+            }
+
+            # Track filtered pairs for logging
+            negative_rate_pairs = []
+
             # Get funding rates based on mode
             if self.use_funding_ma:
                 # Use moving average funding rates
@@ -897,12 +912,22 @@ class VolumeFarmingStrategy:
                     logger.warning("No MA funding rates available")
                     return None
 
-                # Convert MA format to standard format
+                # Convert MA format to standard format, filtering negative current rates
                 funding_rates = []
                 for ma_data in funding_rates_ma:
+                    symbol = ma_data['symbol']
+                    current_rate = current_rates_map.get(symbol, 0)
+
+                    # Skip if current rate is negative (even if MA is positive)
+                    if current_rate < 0:
+                        negative_rate_pairs.append(f"{symbol} ({current_rate*100:.4f}%)")
+                        logger.debug(f"Filtered {symbol}: current funding rate {current_rate*100:.4f}% is negative (MA: {ma_data['ma_rate']*100:.4f}%)")
+                        continue
+
                     funding_rates.append({
-                        'symbol': ma_data['symbol'],
-                        'funding_rate': ma_data['ma_rate'],  # Use MA rate instead of current
+                        'symbol': symbol,
+                        'funding_rate': ma_data['ma_rate'],  # Use MA rate for selection
+                        'current_rate': current_rate,  # Store current rate for reference
                         'effective_apr': ma_data['effective_ma_apr'],
                         'next_funding_time': ma_data['next_funding_time'],
                         'ma_periods': ma_data['ma_periods'],
@@ -910,22 +935,30 @@ class VolumeFarmingStrategy:
                         'using_ma': True
                     })
             else:
-                # Use instantaneous funding rates
-                funding_rates_data = await self.api_manager.get_all_funding_rates()
-                if not funding_rates_data:
-                    logger.warning("No funding rates available")
-                    return None
-
-                # Convert to expected format
+                # Use instantaneous funding rates, filtering negative rates
                 funding_rates = []
-                for rate_data in funding_rates_data:
+                for rate_data in current_funding_rates_data:
+                    symbol = rate_data['symbol']
+                    current_rate = rate_data['rate']
+
+                    # Skip if current rate is negative
+                    if current_rate < 0:
+                        negative_rate_pairs.append(f"{symbol} ({current_rate*100:.4f}%)")
+                        logger.debug(f"Filtered {symbol}: current funding rate {current_rate*100:.4f}% is negative")
+                        continue
+
                     funding_rates.append({
-                        'symbol': rate_data['symbol'],
-                        'funding_rate': rate_data['rate'],
+                        'symbol': symbol,
+                        'funding_rate': current_rate,
+                        'current_rate': current_rate,
                         'effective_apr': rate_data['apr'] / 2,  # Effective APR for 1x leverage
                         'next_funding_time': None,
                         'using_ma': False
                     })
+
+            # Log negative rate filtering summary
+            if negative_rate_pairs:
+                logger.info(f"{Fore.RED}Negative rate filter: {Fore.MAGENTA}{len(negative_rate_pairs)}{Fore.RED} pair(s) excluded: {Fore.YELLOW}{', '.join(negative_rate_pairs)}{Style.RESET_ALL}")
 
             # Get available delta-neutral pairs
             available_pairs = await self.api_manager.discover_delta_neutral_pairs()

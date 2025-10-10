@@ -157,15 +157,27 @@ python test_leverage_rebalance.py
 python test_leverage_detection.py
 ```
 
-## Volume Filtering
+## Pair Filtering
 
-**CRITICAL**: The bot implements **$250M 24h volume threshold** for pair filtering.
+**CRITICAL**: The bot implements multiple filtering criteria for pair selection.
 
-- **Location**: `volume_farming_strategy.py:937` (hardcoded)
+### Volume Filtering
+- **Threshold**: $250M 24h volume minimum
+- **Location**: `volume_farming_strategy.py:938` (hardcoded)
 - **Purpose**: Ensures sufficient liquidity and stable funding rates
 - **Implementation**: `_find_best_funding_opportunity()` filters pairs by combined 24h volume
-- **Check utility**: Use `check_funding_rates.py` to see which pairs pass/fail this filter
 - **Rationale**: Prevents trading low-liquidity pairs with execution risks despite attractive funding rates
+
+### Negative Funding Rate Filtering
+- **Threshold**: Current funding rate must be positive (> 0%)
+- **Location**: `volume_farming_strategy.py:892-961`
+- **Purpose**: Prevents entering positions where you pay funding instead of receiving it
+- **Implementation**: Always fetches current (instantaneous) funding rates and filters out negative rates
+- **Critical behavior**: Filtering uses CURRENT rate, not MA rate
+  - In MA mode: Even if MA is positive, pair is excluded if current rate is negative
+  - In instantaneous mode: Directly filters negative rates
+- **Logging**: Shows filtered pairs with rates in red: `Negative rate filter: 2 pair(s) excluded: BTCUSDT (-0.0050%), ETHUSDT (-0.0023%)`
+- **Check utility**: Use `check_funding_rates.py` to see which pairs pass/fail both filters
 
 ## Configuration
 
@@ -461,7 +473,8 @@ python calculate_safe_stoploss.py
 - Stop-loss concerns → Run `calculate_safe_stoploss.py` to see calculations with safety buffer
 - Portfolio PnL incorrect → Check if external deposits/withdrawals occurred; delete state file to reset baseline
 - Portfolio value too low → Likely only counting USDT, not spot asset holdings; check `_get_current_portfolio_value()`
-- Bot not trading certain pairs → Run `check_funding_rates.py` to verify they meet $250M volume requirement
+- Bot not trading certain pairs → Run `check_funding_rates.py` to verify they meet requirements (≥$250M volume AND positive current funding rate)
+- Bot not trading despite positive MA → Check if current funding rate is negative; bot filters on current rate, not MA
 - API parameter errors in utilities → Ensure using `apiv1_public`/`apiv1_private` (not `_key` suffix)
 
 ## Recent Improvements (2025-10)
@@ -474,17 +487,26 @@ python calculate_safe_stoploss.py
 - **Display**: Main loop shows "CHECK #N" for loop iterations, separate from "Trading Cycles Completed: N"
 - **Semantics**: Each trading cycle = one complete position lifecycle (entry → funding collection → exit)
 
+### Negative Funding Rate Filtering (NEW)
+- **New behavior**: Bot now excludes any pair with negative current funding rate
+- **Critical**: Uses CURRENT rate, not MA rate, for filtering
+  - In MA mode: MA may be positive but if current rate is negative, pair is excluded
+  - This prevents entering positions right as funding turns negative
+- **Logging**: Red-colored summary shows filtered pairs: `Negative rate filter: 2 pair(s) excluded: BTCUSDT (-0.0050%)`
+- **Location**: `volume_farming_strategy.py:892-961` in `_find_best_funding_opportunity()`
+- **Rationale**: Protects against paying funding fees instead of receiving them
+
 ### Funding Rate Analysis Utility (NEW)
 - **New script**: `check_funding_rates.py` for standalone analysis
 - **Displays**: Current APR for all delta-neutral pairs with color-coded output
-- **Volume filtering**: Shows which pairs pass/fail $250M volume requirement
-- **Two tables**: Eligible pairs (≥$250M) and filtered pairs (<$250M)
+- **Dual filtering**: Shows which pairs pass/fail both $250M volume requirement AND positive funding rate
+- **Two tables**: Eligible pairs (≥$250M volume + positive rate) and filtered pairs (low volume or negative rate)
 - **Summary stats**: Total pairs, eligible count, filtered count, best opportunity
 - **Use case**: Pre-trading analysis and debugging why certain pairs aren't traded
 - **Implementation notes**:
   - Uses correct API manager parameter names (`apiv1_public`/`apiv1_private`)
   - Fetches volume from `/fapi/v1/ticker/24hr` endpoint (`quoteVolume` field)
-  - Applies same $250M threshold as main bot (`volume_farming_strategy.py:937`)
+  - Applies same $250M threshold as main bot
   - Async/await pattern with proper error handling
 
 ### Long-term Portfolio PnL Tracking
