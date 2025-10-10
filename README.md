@@ -69,20 +69,49 @@ Create a `.env` file from the example and add your API credentials.
 cp .env.example .env
 ```
 
+#### Getting Your API Credentials
+
+You need to create **two types of API keys** on Aster DEX:
+
+**1. API v1 Credentials (Spot API):**
+
+Navigate to the API section and select "API" (not Pro API):
+
+<img src="infos_API_p1.png" width="600">
+
+This will give you:
+- `APIV1_PUBLIC_KEY` - Your API key
+- `APIV1_PRIVATE_KEY` - Your API secret key
+
+**2. API v3 Credentials (Perpetual API):**
+
+Navigate to the API section and select "Pro API":
+
+<img src="infos_API_p2.png" width="600">
+
+This will give you:
+- `API_USER` - Your EVM wallet address (e.g., from Metamask, Rabby, etc.)
+- `API_SIGNER` - The generated signer address
+- `API_PRIVATE_KEY` - The generated private key
+
+> **⚠️ Important:** Both API keys will only be shown once! Make sure to save them securely.
+
+#### Configure Your `.env` File
+
 Edit `.env` with your Aster exchange API keys:
 
 ```env
-# Aster API v3 Credentials
+# Aster API v3 Credentials (Perpetual API - Pro API)
 API_USER="your_eth_wallet_address"
 API_SIGNER="your_api_signer_key"
 API_PRIVATE_KEY="your_api_private_key"
 
-# Aster API v1 Credentials
+# Aster API v1 Credentials (Spot API - API)
 APIV1_PUBLIC_KEY="your_v1_public_key"
 APIV1_PRIVATE_KEY="your_v1_private_key"
 ```
 
-> **Note:** Never commit your `.env` file.
+> **Note:** Never commit your `.env` file. Both sets of credentials are required for the bot to function.
 
 ### 3. Configure the Strategy
 
