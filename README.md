@@ -186,6 +186,9 @@ python volume_farming_strategy.py
 
 -   **Logs**: All activity is logged to the console and `volume_farming.log`.
 -   **State**: The bot's current state is saved in `volume_farming_state.json`. The bot resumes from this file on restart.
+-   **Cycle Counting**: The bot tracks two metrics:
+    -   **Check iterations**: How many times the bot has checked positions (displayed as "CHECK #N")
+    -   **Trading cycles completed**: How many complete position lifecycles finished (open → hold → close), stored in `cycle_count`
 -   **Portfolio PnL Tracking**: The bot displays comprehensive PnL tracking:
     -   **Total Portfolio Value**: Real-time value of all holdings (spot assets + perp wallet + unrealized PnL)
     -   **Long-term PnL**: Total profit/loss since bot started, displayed in each cycle header with baseline timestamp
@@ -235,6 +238,11 @@ python volume_farming_strategy.py
 ## 🆕 Recent Improvements
 
 **October 2025 Update:**
+- ✅ **Trading Cycle Counting**: Cycle count now based on completed trading cycles (open → hold → close)
+  - Previously counted every loop iteration (check cycle)
+  - Now increments only when a position is successfully closed
+  - Provides accurate tracking of actual trading activity
+  - Displayed separately: "CHECK #N" for loop iterations, "Trading Cycles Completed: N" for actual trades
 - ✅ **Funding Rate Analysis Utility**: New `check_funding_rates.py` script for pre-trading analysis
   - Displays current APR for all delta-neutral pairs
   - Shows which pairs pass/fail the $250M volume requirement

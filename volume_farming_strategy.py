@@ -113,7 +113,7 @@ class VolumeFarmingStrategy:
         self.total_funding_received: float = 0.0
         self.entry_fees_paid: float = 0.0
         self.running = True
-        self.cycle_count = 0
+        self.cycle_count = 0  # Count of completed trading cycles (open → hold → close)
         self.total_profit_loss: float = 0.0
         self.total_positions_opened: int = 0
         self.total_positions_closed: int = 0
@@ -285,7 +285,7 @@ class VolumeFarmingStrategy:
                         self.current_position = None
 
             logger.info(f"{Fore.GREEN}State loaded successfully from {self.state_file}{Style.RESET_ALL}")
-            logger.info(f"  Total cycles: {Fore.CYAN}{self.cycle_count}{Style.RESET_ALL}")
+            logger.info(f"  Trading cycles completed: {Fore.CYAN}{self.cycle_count}{Style.RESET_ALL}")
             logger.info(f"  Total positions opened: {Fore.CYAN}{self.total_positions_opened}{Style.RESET_ALL}")
             logger.info(f"  Total positions closed: {Fore.CYAN}{self.total_positions_closed}{Style.RESET_ALL}")
             pnl_color = Fore.GREEN if self.total_profit_loss >= 0 else Fore.RED
@@ -710,10 +710,11 @@ class VolumeFarmingStrategy:
             await self._capture_initial_portfolio()
 
         try:
+            check_iteration = 0  # Track loop iterations separately from trading cycles
             while self.running:
-                self.cycle_count += 1
+                check_iteration += 1
                 logger.info(f"\n{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
-                logger.info(f"{Fore.CYAN}CYCLE #{Fore.MAGENTA}{self.cycle_count}{Fore.CYAN} - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC{Style.RESET_ALL}")
+                logger.info(f"{Fore.CYAN}CHECK #{Fore.MAGENTA}{check_iteration}{Fore.CYAN} - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | Trading Cycles Completed: {Fore.MAGENTA}{self.cycle_count}{Style.RESET_ALL}")
 
                 # Get and display portfolio PnL
                 current_portfolio_value = await self._get_current_portfolio_value()
@@ -742,7 +743,7 @@ class VolumeFarmingStrategy:
                     if self.position_leverage and self.position_leverage != self.leverage:
                         logger.info(f"{Fore.YELLOW}Note: Position opened at {self.position_leverage}x leverage, config is {self.leverage}x{Style.RESET_ALL}")
                         logger.info(f"  New leverage will apply when position is closed and reopened")
-                        logger.debug(f"[LEVERAGE] Cycle #{self.cycle_count}: Position at {self.position_leverage}x, config at {self.leverage}x - preserving position leverage")
+                        logger.debug(f"[LEVERAGE] Check #{check_iteration}: Position at {self.position_leverage}x, config at {self.leverage}x - preserving position leverage")
 
                     # Monitor existing position
                     should_close = await self._should_close_position()
@@ -1444,9 +1445,10 @@ class VolumeFarmingStrategy:
                 net_profit = self.total_funding_received - self.entry_fees_paid
                 self.total_profit_loss += net_profit
                 self.total_positions_closed += 1
+                self.cycle_count += 1  # Increment trading cycle on successful close
 
                 logger.info(f"{Fore.GREEN}{'='*80}{Style.RESET_ALL}")
-                logger.info(f"{Fore.GREEN}✓ Position closed successfully!{Style.RESET_ALL}")
+                logger.info(f"{Fore.GREEN}✓ Position closed successfully! (Trading Cycle #{self.cycle_count} Completed){Style.RESET_ALL}")
                 logger.info(f"{Fore.GREEN}{'='*80}{Style.RESET_ALL}")
                 logger.info(f"  Total funding received: {Fore.GREEN}${self.total_funding_received:.4f}{Style.RESET_ALL}")
                 logger.info(f"  Total fees paid: {Fore.YELLOW}${self.entry_fees_paid:.4f}{Style.RESET_ALL}")
@@ -1517,7 +1519,7 @@ class VolumeFarmingStrategy:
         # Close API connections
         await self.api_manager.close()
 
-        logger.info(f"{Fore.CYAN}Strategy completed {Fore.MAGENTA}{self.cycle_count}{Fore.CYAN} cycles{Style.RESET_ALL}")
+        logger.info(f"{Fore.CYAN}Trading cycles completed: {Fore.MAGENTA}{self.cycle_count}{Fore.CYAN} (open → hold → close){Style.RESET_ALL}")
         logger.info(f"Total positions opened: {Fore.MAGENTA}{self.total_positions_opened}{Style.RESET_ALL}")
         logger.info(f"Total positions closed: {Fore.MAGENTA}{self.total_positions_closed}{Style.RESET_ALL}")
 

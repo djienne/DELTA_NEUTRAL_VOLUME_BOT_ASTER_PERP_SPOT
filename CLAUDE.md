@@ -63,6 +63,7 @@ volume_farming_strategy.py - makes decisions
 - **Important**: `position_leverage` tracks the leverage used when position was opened (separate from config)
 - **Important**: `entry_price` is saved for accurate spot PnL calculations
 - **Important**: `initial_portfolio_value_usdt` and `initial_portfolio_timestamp` store baseline for long-term PnL tracking
+- **Important**: `cycle_count` tracks **completed trading cycles** (open → hold → close), NOT loop iterations
 - Bot automatically reconciles state with exchange on startup
 - Delete this file to force rediscovery of existing positions **and reset portfolio PnL baseline**
 
@@ -453,6 +454,14 @@ python calculate_safe_stoploss.py
 - API parameter errors in utilities → Ensure using `apiv1_public`/`apiv1_private` (not `_key` suffix)
 
 ## Recent Improvements (2025-10)
+
+### Cycle Counting Based on Trading Activity (NEW)
+- **Changed behavior**: `cycle_count` now tracks **completed trading cycles** (open → hold → close)
+- **Previous behavior**: Incremented on every loop iteration (check cycle)
+- **New behavior**: Increments only when a position is successfully closed
+- **Benefit**: `cycle_count` now represents actual trading activity, not just how many times the bot checked positions
+- **Display**: Main loop shows "CHECK #N" for loop iterations, separate from "Trading Cycles Completed: N"
+- **Semantics**: Each trading cycle = one complete position lifecycle (entry → funding collection → exit)
 
 ### Funding Rate Analysis Utility (NEW)
 - **New script**: `check_funding_rates.py` for standalone analysis

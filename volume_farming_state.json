@@ -1,7 +1,7 @@
 {
   "current_position": {
     "symbol": "ASTERUSDT",
-    "capital": 722.982744,
+    "capital": 711.212106,
     "funding_rate": 0.00020405,
     "effective_apr": 11.171737499999999,
     "spot_qty": 449.9573926,
@@ -12,11 +12,11 @@
   "position_leverage": 3,
   "total_funding_received": 1.92677624,
   "entry_fees_paid": 1.7530013424000002,
-  "cycle_count": 131,
+  "cycle_count": 3,
   "total_profit_loss": 2.5509369440873257,
   "total_positions_opened": 9,
   "total_positions_closed": 3,
   "initial_portfolio_value_usdt": 1184.99813325596,
   "initial_portfolio_timestamp": "2025-10-10T09:16:50.668063",
-  "last_updated": "2025-10-10T09:16:50.668802"
+  "last_updated": "2025-10-10T09:57:22.256043"
 }
