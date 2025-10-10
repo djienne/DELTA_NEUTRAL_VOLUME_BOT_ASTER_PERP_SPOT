@@ -1,25 +1,2 @@
 2025-09-30 01:48:58,883 [INFO] Configuration loaded from config_volume_farming_strategy.json
-2025-09-30 01:48:58,884 [ERROR] ERROR: Not all required environment variables are set in your .env file.
-2025-09-30 01:48:58,884 [ERROR] Please ensure API_USER, API_SIGNER, API_PRIVATE_KEY, APIV1_PUBLIC_KEY, and APIV1_PRIVATE_KEY are configured.
-2025-09-30 01:49:18,494 [INFO] Configuration loaded from config_volume_farming_strategy.json
-2025-09-30 01:49:18,494 [INFO] No state file found, starting fresh
-2025-09-30 01:49:18,495 [INFO] Volume Farming Strategy initialized
-2025-09-30 01:49:18,495 [INFO] Capital Fraction: 50% of available USDT
-2025-09-30 01:49:18,495 [INFO] Min Funding APR: 16.0%
-2025-09-30 01:49:18,495 [INFO] Fee Coverage Multiplier: 2.0x
-2025-09-30 01:49:18,495 [INFO] Funding Rate Mode: Moving Average (10 periods)
-2025-09-30 01:49:18,495 [INFO] Starting Volume Farming Strategy...
-2025-09-30 01:49:18,495 [INFO] Reconciling position state with exchange...
-2025-09-30 01:49:20,987 [INFO] [36mExchange has delta-neutral position but not tracked in state[0m
-2025-09-30 01:49:20,987 [INFO] Checking for existing delta-neutral positions...
-2025-09-30 01:49:23,870 [INFO] [33mDiscovered existing position: ASTERUSDT[0m
-2025-09-30 01:49:23,870 [INFO]   Spot balance: 32.038350
-2025-09-30 01:49:23,870 [INFO]   Perp position: -32.110000
-2025-09-30 01:49:23,870 [INFO]   Position value: $60.83
-2025-09-30 01:49:26,065 [INFO]   Position opened: 2025-09-29 15:48:39
-2025-09-30 01:49:26,065 [INFO]   Funding received: $0.1093
-2025-09-30 01:49:26,065 [INFO]   Funding payments: 2
-2025-09-30 01:49:26,333 [INFO] [32mSuccessfully adopted existing position[0m
-2025-09-30 01:49:26,334 [INFO]   Current funding rate: 0.0435%
-2025-09-30 01:49:26,334 [INFO]   Effective APR: 23.80%
-2025-09-30 01:49:26,334 [INFO] 
+
