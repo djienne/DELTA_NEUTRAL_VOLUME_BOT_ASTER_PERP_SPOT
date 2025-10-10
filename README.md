@@ -30,6 +30,7 @@ The bot operates in a continuous loop:
 -   **Configurable Leverage**: Support for 1x-3x leverage with automatic capital allocation and safe transitions.
 -   **MA Filtering**: Uses a funding rate moving average to avoid volatile, short-lived opportunities.
 -   **Dynamic Pair Discovery**: Automatically finds all tradable delta-neutral pairs.
+-   **Volume Filtering**: Only trades pairs with ≥ $250M 24h volume to ensure sufficient liquidity and minimize slippage.
 -   **State Persistence**: Resumes seamlessly from `volume_farming_state.json` after restarts.
 -   **Configurable**: Tune all parameters via `config_volume_farming_strategy.json`.
 -   **Risk Management**: Includes automatic stop-loss calculation, health checks, and leverage management.
@@ -45,6 +46,29 @@ The bot operates in a continuous loop:
 -   **`strategy_logic.py`**: Contains the pure computational logic for calculations and risk assessment.
 -   **`volume_farming_strategy.py`**: Implements the main strategy loop, state management, and decision-making.
 -   **`utils.py`**: Provides shared utility functions.
+
+## 🔍 Utility Scripts
+
+### Check Funding Rates and Volume Filtering
+
+Use `check_funding_rates.py` to analyze funding rates without running the bot:
+
+```bash
+python check_funding_rates.py
+```
+
+This script displays:
+-   **Current funding rates (APR)** for all delta-neutral pairs
+-   **24h trading volume** for each pair
+-   **Pairs meeting volume requirements** (≥ $250M 24h volume)
+-   **Pairs filtered out** by insufficient volume
+-   **Summary statistics** including best opportunity
+
+This is useful for:
+-   Understanding which pairs are eligible for trading
+-   Identifying the most profitable funding rate opportunities
+-   Monitoring volume requirements before starting the bot
+-   Debugging why certain pairs aren't being traded
 
 ## 📋 Prerequisites
 
@@ -177,6 +201,14 @@ python volume_farming_strategy.py
 
 ## 📌 Important Notes
 
+> **Volume Filtering**: The bot only trades pairs with **≥ $250M 24h volume** to ensure:
+> - Sufficient liquidity for position entry/exit
+> - Minimal slippage on orders
+> - Stable funding rates (high-volume pairs tend to have more predictable funding)
+> - Lower risk of manipulation
+>
+> Use `check_funding_rates.py` to see which pairs meet this requirement. This threshold filters out low-liquidity pairs that may have attractive funding rates but carry execution risks.
+
 > **Leverage**: The bot supports configurable leverage (1x-3x) via the config file.
 > - **1x leverage**: 50/50 split between spot and perp - safest option
 > - **2x leverage**: 67% spot / 33% perp - moderate risk, better capital efficiency
@@ -192,7 +224,8 @@ python volume_farming_strategy.py
 
 -   **Position not tracked after restart?** Delete `volume_farming_state.json` and restart the bot. It will rediscover the position from the exchange.
 -   **Insufficient balance errors?** Ensure you have USDT in both spot and perpetual wallets. The bot can auto-rebalance if the total balance is sufficient.
--   **No opportunities found?** Your `min_funding_apr` might be too high, or market conditions may not be favorable.
+-   **No opportunities found?** Your `min_funding_apr` might be too high, or market conditions may not be favorable. Also check if pairs are being filtered by volume requirements.
+-   **Why isn't the bot trading pair X?** Run `check_funding_rates.py` to see if the pair has sufficient volume (≥ $250M 24h). Pairs below this threshold are automatically filtered out for safety.
 -   **Leverage mismatch warnings?** This is normal if you changed leverage in config while holding a position. The position maintains its original leverage until closed, then new positions use the new leverage setting.
 -   **Spot PnL showing $0.00?** The bot will automatically fix this on the next position evaluation cycle by retrieving the entry price from the exchange.
 -   **Health check failures with valid leverage?** Ensure your bot version supports 1x-3x leverage validation (not hardcoded to 1x only).
@@ -202,6 +235,11 @@ python volume_farming_strategy.py
 ## 🆕 Recent Improvements
 
 **October 2025 Update:**
+- ✅ **Funding Rate Analysis Utility**: New `check_funding_rates.py` script for pre-trading analysis
+  - Displays current APR for all delta-neutral pairs
+  - Shows which pairs pass/fail the $250M volume requirement
+  - Identifies best opportunities without running the bot
+  - Useful for debugging and monitoring market conditions
 - ✅ **Long-term Portfolio PnL Tracking**: Tracks total portfolio performance from initial baseline with automatic asset valuation
   - Captures initial portfolio value (all spot assets + perp wallet + unrealized PnL)
   - Displays real-time total portfolio value and PnL in each cycle header

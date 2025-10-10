@@ -129,6 +129,18 @@ pip install -r requirements.txt
 python volume_farming_strategy.py
 ```
 
+### Utility Scripts
+```bash
+# Check funding rates and volume filtering (NEW)
+python check_funding_rates.py
+
+# Calculate safe stop-loss for current leverage
+python calculate_safe_stoploss.py
+
+# Get 24h volume for specific pair
+python get_volume_24h.py
+```
+
 ### Testing Tools
 ```bash
 # Test setting leverage on BTC
@@ -139,10 +151,17 @@ python test_leverage_rebalance.py
 
 # Test leverage detection on existing positions
 python test_leverage_detection.py
-
-# Calculate safe stop-loss for current leverage
-python calculate_safe_stoploss.py
 ```
+
+## Volume Filtering
+
+**CRITICAL**: The bot implements **$250M 24h volume threshold** for pair filtering.
+
+- **Location**: `volume_farming_strategy.py:937` (hardcoded)
+- **Purpose**: Ensures sufficient liquidity and stable funding rates
+- **Implementation**: `_find_best_funding_opportunity()` filters pairs by combined 24h volume
+- **Check utility**: Use `check_funding_rates.py` to see which pairs pass/fail this filter
+- **Rationale**: Prevents trading low-liquidity pairs with execution risks despite attractive funding rates
 
 ## Configuration
 
@@ -263,6 +282,22 @@ All configuration in `config_volume_farming_strategy.json`:
 3. **Return structured data** - Dicts or tuples with clear keys
 4. **Add constants** - At top of file for easy tuning
 
+### When Creating Utility Scripts
+
+**Example**: `check_funding_rates.py` provides standalone funding rate analysis.
+
+1. **API Manager initialization** - Use correct parameter names:
+   - `apiv1_public` and `apiv1_private` (NOT `apiv1_public_key`/`apiv1_private_key`)
+   - All 5 credentials required: `api_user`, `api_signer`, `api_private_key`, `apiv1_public`, `apiv1_private`
+2. **Volume data source** - Fetch from `/fapi/v1/ticker/24hr` endpoint
+   - Use `quoteVolume` field for USDT volume
+   - Apply same $250M threshold as main bot
+3. **Funding rate calculation** - Use same formula as bot:
+   - `funding_rate * 3 * 365 * 100` (3x daily, 365 days, as percentage)
+4. **Color-coded output** - Follow bot's colorama scheme
+5. **Async/await** - All API calls should be async with proper session management
+6. **Error handling** - Use `return_exceptions=True` in `asyncio.gather()` for resilience
+
 ### When Working with Terminal Output Colors
 
 **Color Scheme** (using `colorama` library):
@@ -304,8 +339,10 @@ logger.info(f"PnL: {pnl_color}${pnl:.2f}{Style.RESET_ALL}")
 - `AUTOMATIC_STOPLOSS_IMPLEMENTATION.md` - Stop-loss calculation details
 - `VOLUME_FARMING_GUIDE.md` - Strategy deep-dive
 
-**Tools:**
+**Utility Scripts:**
+- `check_funding_rates.py` - Displays funding rates and volume filtering analysis for all delta-neutral pairs
 - `calculate_safe_stoploss.py` - Validates stop-loss calculations for all leverage levels
+- `get_volume_24h.py` - Fetches 24h volume for specific pairs
 
 **Logs:**
 - `volume_farming.log` - All bot activity (rotated, 10MB max, 3 files)
@@ -412,10 +449,25 @@ python calculate_safe_stoploss.py
 - Stop-loss concerns → Run `calculate_safe_stoploss.py` to see calculations with safety buffer
 - Portfolio PnL incorrect → Check if external deposits/withdrawals occurred; delete state file to reset baseline
 - Portfolio value too low → Likely only counting USDT, not spot asset holdings; check `_get_current_portfolio_value()`
+- Bot not trading certain pairs → Run `check_funding_rates.py` to verify they meet $250M volume requirement
+- API parameter errors in utilities → Ensure using `apiv1_public`/`apiv1_private` (not `_key` suffix)
 
 ## Recent Improvements (2025-10)
 
-### Long-term Portfolio PnL Tracking (NEW)
+### Funding Rate Analysis Utility (NEW)
+- **New script**: `check_funding_rates.py` for standalone analysis
+- **Displays**: Current APR for all delta-neutral pairs with color-coded output
+- **Volume filtering**: Shows which pairs pass/fail $250M volume requirement
+- **Two tables**: Eligible pairs (≥$250M) and filtered pairs (<$250M)
+- **Summary stats**: Total pairs, eligible count, filtered count, best opportunity
+- **Use case**: Pre-trading analysis and debugging why certain pairs aren't traded
+- **Implementation notes**:
+  - Uses correct API manager parameter names (`apiv1_public`/`apiv1_private`)
+  - Fetches volume from `/fapi/v1/ticker/24hr` endpoint (`quoteVolume` field)
+  - Applies same $250M threshold as main bot (`volume_farming_strategy.py:937`)
+  - Async/await pattern with proper error handling
+
+### Long-term Portfolio PnL Tracking
 - **Automatic baseline capture**: Captures initial portfolio value on first run
 - **Comprehensive asset valuation**: Includes ALL spot holdings (USDT + BTC + ETH + etc.) at current prices
 - **Real-time calculation**: Fetches current prices for all assets each cycle
