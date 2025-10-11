@@ -12,6 +12,7 @@ This script will:
 import asyncio
 import os
 import json
+import subprocess
 from datetime import datetime
 from dotenv import load_dotenv
 from colorama import init, Fore, Style
@@ -205,6 +206,28 @@ async def main():
                 json.dump(state, f, indent=2)
 
             print(f"{Fore.GREEN}✓ State file updated{Style.RESET_ALL}\n")
+
+            # Stop docker compose
+            print(f"{Fore.YELLOW}Stopping Docker Compose...{Style.RESET_ALL}")
+            try:
+                result = subprocess.run(
+                    ['docker', 'compose', 'down'],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                if result.returncode == 0:
+                    print(f"{Fore.GREEN}✓ Docker Compose stopped successfully{Style.RESET_ALL}\n")
+                else:
+                    print(f"{Fore.YELLOW}Warning: Docker Compose command exited with code {result.returncode}{Style.RESET_ALL}")
+                    if result.stderr:
+                        print(f"{Fore.YELLOW}  {result.stderr.strip()}{Style.RESET_ALL}\n")
+            except subprocess.TimeoutExpired:
+                print(f"{Fore.YELLOW}Warning: Docker Compose down command timed out{Style.RESET_ALL}\n")
+            except FileNotFoundError:
+                print(f"{Fore.YELLOW}Warning: Docker command not found (are you running in Docker?){Style.RESET_ALL}\n")
+            except Exception as e:
+                print(f"{Fore.YELLOW}Warning: Failed to stop Docker Compose: {e}{Style.RESET_ALL}\n")
         else:
             print(f"{Fore.RED}⚠️  Emergency exit PARTIALLY FAILED!{Style.RESET_ALL}")
             print(f"{Fore.YELLOW}Please check your exchange positions manually.{Style.RESET_ALL}\n")
