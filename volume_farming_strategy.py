@@ -878,7 +878,12 @@ class VolumeFarmingStrategy:
         """
         Scan all available pairs and find the best funding rate opportunity.
         Uses moving average if enabled, otherwise uses instantaneous rates.
-        Filters pairs by minimum 24h volume ($250M) and negative current funding rates.
+
+        Applies multiple filters:
+        1. Negative current funding rates (excluded)
+        2. Minimum 24h volume >= $250M
+        3. Spot-perp price spread <= 0.15%
+        4. Minimum APR threshold
 
         Returns:
             Dict with symbol and funding rate info, or None if no opportunity
@@ -986,10 +991,86 @@ class VolumeFarmingStrategy:
             logger.info(f"{Fore.CYAN}Volume filter: {Fore.MAGENTA}{len(high_volume_pairs)}/{len(available_pairs)}{Fore.CYAN} pairs with >= {Fore.GREEN}${min_volume_threshold/1e6:.0f}M{Fore.CYAN} volume{Style.RESET_ALL}")
             logger.info(f"High-volume pairs: {Fore.YELLOW}{', '.join(high_volume_pairs)}{Style.RESET_ALL}")
 
-            # Show ALL available pairs (including currently held position)
+            # Apply spread filtering (filter out pairs with spread > 0.15%)
+            logger.info(f"{Fore.CYAN}Checking spot-perp price spreads...{Style.RESET_ALL}")
+            max_spread_threshold = 0.15  # 0.15% maximum spread
+
+            # Fetch spot and perp prices concurrently
+            spot_tasks = [self.api_manager.get_spot_book_ticker(symbol, suppress_errors=True) for symbol in high_volume_pairs]
+            perp_tasks = [self.api_manager.get_perp_book_ticker(symbol) for symbol in high_volume_pairs]
+
+            spot_results = await asyncio.gather(*spot_tasks, return_exceptions=True)
+            perp_results = await asyncio.gather(*perp_tasks, return_exceptions=True)
+
+            # Calculate spreads and filter
+            spread_filtered_pairs = []
+            high_spread_pairs = []
+
+            for i, symbol in enumerate(high_volume_pairs):
+                spot_data = spot_results[i]
+                perp_data = perp_results[i]
+
+                # Skip if either fetch failed
+                if isinstance(spot_data, Exception) or isinstance(perp_data, Exception):
+                    logger.debug(f"Failed to fetch prices for {symbol}, skipping spread check")
+                    spread_filtered_pairs.append(symbol)  # Include if we can't check
+                    continue
+
+                # Skip if missing price data
+                if not spot_data or not perp_data:
+                    logger.debug(f"Missing price data for {symbol}, skipping spread check")
+                    spread_filtered_pairs.append(symbol)  # Include if we can't check
+                    continue
+
+                spot_bid = spot_data.get('bidPrice')
+                spot_ask = spot_data.get('askPrice')
+                perp_bid = perp_data.get('bidPrice')
+                perp_ask = perp_data.get('askPrice')
+
+                # Skip if any price is missing
+                if not all([spot_bid, spot_ask, perp_bid, perp_ask]):
+                    logger.debug(f"Incomplete price data for {symbol}, skipping spread check")
+                    spread_filtered_pairs.append(symbol)  # Include if we can't check
+                    continue
+
+                try:
+                    # Convert to float
+                    spot_bid = float(spot_bid)
+                    spot_ask = float(spot_ask)
+                    perp_bid = float(perp_bid)
+                    perp_ask = float(perp_ask)
+
+                    # Calculate mid prices
+                    spot_mid = (spot_bid + spot_ask) / 2
+                    perp_mid = (perp_bid + perp_ask) / 2
+
+                    # Calculate spread percentage (perp - spot) / spot * 100
+                    spread_pct = abs((perp_mid - spot_mid) / spot_mid * 100)
+
+                    if spread_pct <= max_spread_threshold:
+                        spread_filtered_pairs.append(symbol)
+                        logger.debug(f"{symbol}: spread {spread_pct:.4f}% <= {max_spread_threshold}% (OK)")
+                    else:
+                        high_spread_pairs.append(f"{symbol} ({spread_pct:.4f}%)")
+                        logger.debug(f"{symbol}: spread {spread_pct:.4f}% > {max_spread_threshold}% (FILTERED)")
+                except Exception as calc_error:
+                    logger.debug(f"Error calculating spread for {symbol}: {calc_error}")
+                    spread_filtered_pairs.append(symbol)  # Include if calculation fails
+
+            # Log spread filtering results
+            if high_spread_pairs:
+                logger.info(f"{Fore.RED}Spread filter: {Fore.MAGENTA}{len(high_spread_pairs)}{Fore.RED} pair(s) excluded (spread > {max_spread_threshold}%): {Fore.YELLOW}{', '.join(high_spread_pairs)}{Style.RESET_ALL}")
+
+            if not spread_filtered_pairs:
+                logger.warning(f"No pairs meet spread threshold of {max_spread_threshold}%")
+                return None
+
+            logger.info(f"{Fore.GREEN}Spread filter: {Fore.MAGENTA}{len(spread_filtered_pairs)}/{len(high_volume_pairs)}{Fore.GREEN} pairs with spread <= {max_spread_threshold}%{Style.RESET_ALL}")
+
+            # Show ALL available pairs (including currently held position) that passed all filters
             all_candidates = [
                 rate for rate in funding_rates
-                if rate['symbol'] in high_volume_pairs
+                if rate['symbol'] in spread_filtered_pairs
             ]
 
             if not all_candidates:
@@ -1004,13 +1085,13 @@ class VolumeFarmingStrategy:
 
             # Display table of ALL available rates
             logger.info(f"\n{Fore.CYAN}Funding Rate Scan Results:{Style.RESET_ALL}")
-            logger.info("=" * 100)
+            logger.info("=" * 120)
 
             if all_candidates[0].get('using_ma'):
-                # MA mode - show MA rate and stdev
-                header = f"{'Symbol':<12} {'MA Rate %':<12} {'Eff APR %':<12} {'StDev %':<12} {'Next Funding':<20} {'Status':<15}"
+                # MA mode - show MA rate, current rate, and stdev
+                header = f"{'Symbol':<12} {'MA Rate %':<12} {'MA APR %':<12} {'Curr APR %':<13} {'StDev %':<12} {'Next Funding':<20} {'Status':<15}"
                 logger.info(header)
-                logger.info("-" * 100)
+                logger.info("-" * 120)
 
                 for c in all_candidates:
                     # Mark current position
@@ -1029,7 +1110,13 @@ class VolumeFarmingStrategy:
 
                     symbol_display = f"{c['symbol']:<12}"
                     ma_rate = f"{c['funding_rate']*100:>11.4f}"
-                    eff_apr = f"{c['effective_apr']:>11.2f}"
+                    ma_apr = f"{c['effective_apr']:>11.2f}"
+
+                    # Calculate current APR from current rate
+                    current_rate = c.get('current_rate', 0)
+                    current_apr = current_rate * 3 * 365 * 100  # 3x daily, 365 days, as percentage
+                    curr_apr_str = f"{current_apr:>12.2f}"
+
                     stdev = f"{c.get('ma_stdev', 0)*100:>11.4f}"
 
                     # Format next funding time
@@ -1044,7 +1131,7 @@ class VolumeFarmingStrategy:
                     else:
                         next_funding = 'N/A'
 
-                    logger.info(f"{color}{symbol_display} {ma_rate} {eff_apr} {stdev} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
+                    logger.info(f"{color}{symbol_display} {ma_rate} {ma_apr} {curr_apr_str} {stdev} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
             else:
                 # Instantaneous mode - simpler table
                 header = f"{'Symbol':<12} {'Rate %':<12} {'Eff APR %':<12} {'Next Funding':<20} {'Status':<15}"
@@ -1084,7 +1171,7 @@ class VolumeFarmingStrategy:
 
                     logger.info(f"{color}{symbol_display} {rate} {eff_apr} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
 
-            logger.info("=" * 100)
+            logger.info("=" * 120)
 
             # Filter by minimum APR threshold (effective APR for 1x leverage)
             candidates = [

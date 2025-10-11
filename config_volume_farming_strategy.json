@@ -16,7 +16,7 @@
   },
 
   "position_management": {
-    "fee_coverage_multiplier": 1.1,
+    "fee_coverage_multiplier": 1.5,
     "max_position_age_hours": 336,
     "loop_interval_seconds": 300,
     "_comment_fee_coverage": "Close when funding received >= this multiplier × total fees (1.5 = 150%). Some margin to also cover spreads.",
@@ -25,7 +25,7 @@
   },
 
   "leverage_settings": {
-    "leverage": 3,
+    "leverage": 1,
     "_comment_leverage": "Leverage for perpetual positions (1-3). 1=50/50 split, 2=1/3 perp 2/3 spot, 3=1/4 perp 3/4 spot. Higher leverage = more capital efficiency.",
     "_comment_stop_loss": "Emergency stop-loss is calculated AUTOMATICALLY based on leverage with 0.7% safety buffer to prevent liquidation. For 1x: -50%, 2x: -33%, 3x: -24%"
   }

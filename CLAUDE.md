@@ -135,6 +135,9 @@ python volume_farming_strategy.py
 # Check funding rates and volume filtering
 python check_funding_rates.py
 
+# Check spot-perp price spreads
+python check_spot_perp_spreads.py
+
 # Emergency exit - manually close current position
 python emergency_exit.py
 
@@ -178,6 +181,16 @@ python test_leverage_detection.py
   - In instantaneous mode: Directly filters negative rates
 - **Logging**: Shows filtered pairs with rates in red: `Negative rate filter: 2 pair(s) excluded: BTCUSDT (-0.0050%), ETHUSDT (-0.0023%)`
 - **Check utility**: Use `check_funding_rates.py` to see which pairs pass/fail both filters
+
+### Spot-Perp Price Spread Filtering
+- **Threshold**: Maximum 0.15% absolute spread between spot and perp mid prices
+- **Location**: `volume_farming_strategy.py:989-1063`
+- **Purpose**: Ensures tight price alignment between spot and perp markets for safe delta-neutral execution
+- **Implementation**: Fetches spot and perp book tickers, calculates mid prices, and filters pairs with excessive spread
+- **Calculation**: `abs((perp_mid - spot_mid) / spot_mid * 100)` must be ≤ 0.15%
+- **Logging**: Shows filtered pairs with spreads in red: `Spread filter: 1 pair(s) excluded (spread > 0.15%): GIGGLEUSDT (7.7996%)`
+- **Rationale**: Large spreads indicate liquidity issues or market inefficiencies that could impact delta-neutral strategy execution
+- **Check utility**: Use `check_spot_perp_spreads.py` to analyze current spreads across all pairs
 
 ## Configuration
 
@@ -266,6 +279,10 @@ All configuration in `config_volume_farming_strategy.json`:
 3. **Use `datetime.utcfromtimestamp()`** - Not `fromtimestamp()` to avoid timezone issues
 4. **Format with UTC suffix** - `strftime('%Y-%m-%d %H:%M UTC')`
 5. **Convert milliseconds to seconds** - Exchange timestamps are in ms: `timestamp / 1000`
+6. **Display both MA and Current APR** - In MA mode, show both MA APR (used for selection) and Current APR (for trend comparison)
+   - MA APR: `effective_apr` from MA calculation
+   - Current APR: `current_rate * 3 * 365 * 100`
+   - Helps users see if current rate is higher/lower than historical average
 
 ### When Working with Timestamps
 
@@ -359,6 +376,7 @@ logger.info(f"PnL: {pnl_color}${pnl:.2f}{Style.RESET_ALL}")
 
 **Utility Scripts:**
 - `check_funding_rates.py` - Displays funding rates and volume filtering analysis for all delta-neutral pairs
+- `check_spot_perp_spreads.py` - Analyzes spot-perp price spreads to identify liquidity and arbitrage issues
 - `emergency_exit.py` - Manually closes current delta-neutral position with confirmation and PnL display
 - `calculate_safe_stoploss.py` - Validates stop-loss calculations for all leverage levels
 - `get_volume_24h.py` - Fetches 24h volume for specific pairs
@@ -473,11 +491,23 @@ python calculate_safe_stoploss.py
 - Stop-loss concerns → Run `calculate_safe_stoploss.py` to see calculations with safety buffer
 - Portfolio PnL incorrect → Check if external deposits/withdrawals occurred; delete state file to reset baseline
 - Portfolio value too low → Likely only counting USDT, not spot asset holdings; check `_get_current_portfolio_value()`
-- Bot not trading certain pairs → Run `check_funding_rates.py` to verify they meet requirements (≥$250M volume AND positive current funding rate)
+- Bot not trading certain pairs → Run `check_funding_rates.py` to verify they meet requirements (≥$250M volume AND positive current funding rate AND ≤0.15% spread)
 - Bot not trading despite positive MA → Check if current funding rate is negative; bot filters on current rate, not MA
+- Bot filtering pairs with good funding → Run `check_spot_perp_spreads.py` to check if spot-perp spread exceeds 0.15%
 - API parameter errors in utilities → Ensure using `apiv1_public`/`apiv1_private` (not `_key` suffix)
 
 ## Recent Improvements (2025-10)
+
+### Spot-Perp Price Spread Filtering (NEW)
+- **New behavior**: Bot now filters pairs with spot-perp spread > 0.15%
+- **Purpose**: Ensures tight price alignment between spot and perp markets for safe delta-neutral execution
+- **Implementation**: Fetches spot and perp book tickers concurrently, calculates mid price spread
+- **Location**: `volume_farming_strategy.py:989-1063` in `_find_best_funding_opportunity()`
+- **Formula**: `abs((perp_mid - spot_mid) / spot_mid * 100)` must be ≤ 0.15%
+- **Logging**: Red-colored summary shows filtered pairs: `Spread filter: 1 pair(s) excluded (spread > 0.15%): GIGGLEUSDT (7.7996%)`
+- **Rationale**: Large spreads indicate liquidity issues or market inefficiencies that could cause slippage during execution
+- **New utility**: `check_spot_perp_spreads.py` - Standalone script to analyze all spread data with detailed statistics
+- **Filtering order**: Volume (≥$250M) → Negative rates → Spread (≤0.15%) → Min APR threshold
 
 ### Cycle Counting Based on Trading Activity (NEW)
 - **Changed behavior**: `cycle_count` now tracks **completed trading cycles** (open → hold → close)
@@ -508,6 +538,14 @@ python calculate_safe_stoploss.py
   - Fetches volume from `/fapi/v1/ticker/24hr` endpoint (`quoteVolume` field)
   - Applies same $250M threshold as main bot
   - Async/await pattern with proper error handling
+
+### Enhanced Funding Rate Display (NEW)
+- **Dual APR columns**: In MA mode, table now shows both MA APR and Current APR
+- **MA APR %**: Moving average APR used for stable position selection
+- **Curr APR %**: Real-time instantaneous APR calculated from current funding rate
+- **Benefits**: Users can see trends (is current rate spiking or declining vs MA?)
+- **Selection logic**: Bot still selects based on MA APR for stability
+- **Location**: `volume_farming_strategy.py:1090-1134` in funding rate table display
 
 ### Long-term Portfolio PnL Tracking
 - **Automatic baseline capture**: Captures initial portfolio value on first run
@@ -563,6 +601,7 @@ python calculate_safe_stoploss.py
 - **UTC timestamps**: All timestamps use UTC consistently (position opened, cycles, funding times)
 - **Clear time labels**: All displayed times include " UTC" suffix for clarity
 - **Stop-loss logging**: Shows auto-calculated value on startup with safety buffer info
+- **Dual APR display**: Funding rate table shows both MA APR and Current APR in MA mode for trend comparison
 
 ## API Authentication
 

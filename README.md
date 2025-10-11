@@ -21,6 +21,7 @@ The bot operates in a continuous loop:
 3.  **Opportunity Scanning**: If no position is open, it scans all delta-neutral pairs for the most profitable and stable funding rate APR, filtering out:
     *   Pairs with negative current funding rates (even if MA is positive).
     *   Pairs with < $250M 24h trading volume.
+    *   Pairs with spot-perp price spread > 0.15%.
     *   Pairs with APR below the configured minimum threshold.
 4.  **Open Position**: Automatically calculates position size, rebalances USDT between spot and perpetual wallets, and executes trades to open a new delta-neutral position (long spot, short perpetuals).
 5.  **Repeat**: Saves its state and repeats the cycle.
@@ -31,10 +32,11 @@ The bot operates in a continuous loop:
 -   **Delta-Neutral**: Minimizes directional risk with balanced spot and perpetual positions.
 -   **Funding Rate Arbitrage**: Profits from collecting funding payments on perpetuals (every 8 hours at 00:00, 08:00, 16:00 UTC).
 -   **Configurable Leverage**: Support for 1x-3x leverage with automatic capital allocation and safe transitions.
--   **MA Filtering**: Uses a funding rate moving average to avoid volatile, short-lived opportunities.
+-   **MA Filtering**: Uses a funding rate moving average to avoid volatile, short-lived opportunities while displaying both MA and current APR for comparison.
 -   **Dynamic Pair Discovery**: Automatically finds all tradable delta-neutral pairs.
 -   **Volume Filtering**: Only trades pairs with ≥ $250M 24h volume to ensure sufficient liquidity and minimize slippage.
 -   **Negative Rate Filtering**: Automatically excludes pairs with negative current funding rates, even if their MA is positive.
+-   **Spread Filtering**: Only trades pairs with spot-perp price spread ≤ 0.15% to ensure tight price alignment and safe execution.
 -   **State Persistence**: Resumes seamlessly from `volume_farming_state.json` after restarts.
 -   **Configurable**: Tune all parameters via `config_volume_farming_strategy.json`.
 -   **Risk Management**: Includes automatic stop-loss calculation, health checks, and leverage management.
@@ -73,6 +75,26 @@ This is useful for:
 -   Identifying the most profitable funding rate opportunities
 -   Monitoring volume and funding rate requirements before starting the bot
 -   Debugging why certain pairs aren't being traded (negative rates, low volume, etc.)
+
+### Check Spot-Perp Price Spreads
+
+Use `check_spot_perp_spreads.py` to analyze price spreads between spot and perpetual markets:
+
+```bash
+python check_spot_perp_spreads.py
+```
+
+This script displays:
+-   **Spot mid price** and **perp mid price** for all delta-neutral pairs
+-   **Absolute spread** (in dollars) and **percentage spread** between spot and perp
+-   **Color-coded warnings** for large spreads (red: ≥0.1%, yellow: ≥0.05%, green: <0.05%)
+-   **Summary statistics** including average spread, largest/smallest spreads, premium/discount counts
+
+This is useful for:
+-   Identifying pairs with liquidity issues or market inefficiencies
+-   Understanding why pairs with good funding rates might be filtered out
+-   Detecting arbitrage opportunities between spot and perp markets
+-   Monitoring price alignment before opening delta-neutral positions
 
 ### Emergency Exit
 
@@ -227,6 +249,14 @@ python volume_farming_strategy.py
     -   Green for profits and success, Red for losses and errors
     -   Yellow for warnings, Cyan for information, Magenta for important values
 -   **UTC Timestamps**: All timestamps (position opened, cycles, funding times) are displayed in UTC for consistency
+-   **Multi-Layer Filtering**: Four-stage filtering process ensures only high-quality pairs are traded:
+    1. Volume filter (≥ $250M 24h volume)
+    2. Negative rate filter (current funding rate must be positive)
+    3. Spread filter (≤ 0.15% spot-perp price spread)
+    4. APR threshold (meets minimum funding rate requirement)
+-   **Dual APR Display**: When using MA mode, the funding rate table shows both:
+    - **MA APR %**: Stable moving average used for position selection
+    - **Curr APR %**: Real-time instantaneous APR for comparison and trend analysis
 
 <img src="screen.png" width="800">
 
