@@ -1,0 +1,32 @@
+{
+  "symbols_to_monitor": [
+    "BTC",
+    "ETH",
+    "SOL",
+    "BNB",
+    "ASTER",
+    "PAXG",
+    "DOGE",
+    "XRP",
+    "LINK",
+    "HYPE",
+    "PUMP",
+    "FARTCOIN"
+  ],
+  "quote": "USD",
+  "leverage": 1,
+  "notional_per_position": 900.0,
+  "comment_":"notional_per_position is Maximum possible, will adjust to actual available capital",
+  "hold_duration_hours": 12.0,
+  "wait_between_cycles_minutes": 5.0,
+  "check_interval_seconds": 300,
+  "min_net_apr_threshold": 5.0,
+  "min_volume_usd": 250000000,
+  "comment2_":"min_volume_usd filters out pairs with less than $250M combined 24h volume",
+  "max_spread_pct": 0.15,
+  "comment3_":"max_spread_pct filters out pairs with cross-exchange spread > 0.15%",
+  "comment4_":"stop_loss is auto-calculated based on leverage with 0.7 safety margin",
+  "enable_stop_loss": true,
+  "enable_pnl_tracking": true,
+  "enable_health_monitoring": true
+}
