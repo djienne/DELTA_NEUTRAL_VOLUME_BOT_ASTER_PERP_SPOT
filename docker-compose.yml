@@ -11,24 +11,18 @@ services:
   dn_bot:
     build: .
     container_name: dn_farming_bot
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '512M'
     env_file:
       - .env
     restart: unless-stopped
-    # Keep stdin open to allow for interactive terminal input
     stdin_open: true
-    # Allocate a pseudo-TTY
     tty: true
-    # Mount the source code and data into the container
     volumes:
-      # Python source files (live updates during development)
-      - ./volume_farming_strategy.py:/app/volume_farming_strategy.py
-      - ./aster_api_manager.py:/app/aster_api_manager.py
-      - ./strategy_logic.py:/app/strategy_logic.py
-      - ./utils.py:/app/utils.py
-      # Configuration and state files (persistent data)
-      - ./config_volume_farming_strategy.json:/app/config_volume_farming_strategy.json
-      - ./volume_farming_state.json:/app/volume_farming_state.json
-      - ./volume_farming.log:/app/volume_farming.log
+      - ./:/app/
     logging:
       driver: "json-file"
       options:
