@@ -505,9 +505,9 @@ class DeltaNeutralLogic:
             leverage = pos.get('leverage', 1)
             position_value_usd = pos.get('position_value_usd', 0.0)
 
-            # Check for leverage issues (critical for delta-neutral strategy)
-            if leverage != 1:
-                critical_issues.append(f"{symbol}: Leverage is {leverage}x (should be 1x for delta-neutral)")
+            # Check for leverage issues (must be within valid range)
+            if leverage < 1 or leverage > 3:
+                critical_issues.append(f"{symbol}: Leverage is {leverage}x (must be 1x-3x for delta-neutral)")
 
             # Check for significant imbalance
             if imbalance_pct > IMBALANCE_THRESHOLD_PCT:

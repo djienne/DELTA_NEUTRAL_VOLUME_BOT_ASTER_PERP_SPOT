@@ -309,11 +309,19 @@ class AsterApiManager:
         return await self._signed_request_v3('POST', '/fapi/v3/order', params)
 
     async def place_spot_buy_market_order(self, symbol: str, quote_quantity: str) -> dict:
-        """Place a spot market buy order with correct precision."""
+        """Place a spot market buy order using USDT amount with correct precision."""
         formatted_params = await self._get_formatted_order_params(
             symbol=symbol, market_type='spot', quote_quantity=float(quote_quantity)
         )
         params = {'symbol': symbol, 'side': 'BUY', 'type': 'MARKET', 'quoteOrderQty': formatted_params['quoteOrderQty']}
+        return await self._make_spot_request('POST', '/api/v1/order', params=params, signed=True)
+
+    async def place_spot_buy_market_order_by_quantity(self, symbol: str, base_quantity: str) -> dict:
+        """Place a spot market buy order using exact base asset quantity with correct precision."""
+        formatted_params = await self._get_formatted_order_params(
+            symbol=symbol, market_type='spot', quantity=float(base_quantity)
+        )
+        params = {'symbol': symbol, 'side': 'BUY', 'type': 'MARKET', 'quantity': formatted_params['quantity']}
         return await self._make_spot_request('POST', '/api/v1/order', params=params, signed=True)
 
     async def place_spot_sell_market_order(self, symbol: str, base_quantity: str) -> dict:
@@ -406,6 +414,81 @@ class AsterApiManager:
         }
 
         return await self._signed_request_v3('POST', '/fapi/v3/asset/wallet/transfer', params)
+
+    async def rebalance_usdt_by_leverage(self, leverage: int = 1) -> dict:
+        """
+        Rebalance USDT between spot and perpetual accounts based on leverage.
+
+        Leverage determines the split:
+        - leverage=1: 50% spot, 50% perp (1x leverage)
+        - leverage=2: 67% spot, 33% perp (2x leverage)
+        - leverage=3: 75% spot, 25% perp (3x leverage)
+
+        Args:
+            leverage: Leverage multiplier (1-3)
+
+        Returns:
+            Dictionary with rebalance details and transfer result (if transfer was needed)
+        """
+        # Validate leverage
+        if leverage < 1 or leverage > 3:
+            raise ValueError(f"Leverage must be between 1 and 3, got {leverage}")
+
+        # Calculate target percentages based on leverage
+        # Formula: perp_pct = 1 / (leverage + 1), spot_pct = leverage / (leverage + 1)
+        perp_target_pct = 1.0 / (leverage + 1)
+        spot_target_pct = leverage / (leverage + 1)
+
+        # Get current balances
+        spot_balances = await self.get_spot_account_balances()
+        perp_account = await self.get_perp_account_info()
+
+        # Extract USDT balances
+        spot_usdt = next((float(b.get('free', 0)) for b in spot_balances if b.get('asset') == 'USDT'), 0.0)
+
+        # Get USDT from perpetual account assets
+        perp_assets = perp_account.get('assets', [])
+        perp_usdt = next((float(a.get('availableBalance', 0)) for a in perp_assets if a.get('asset') == 'USDT'), 0.0)
+
+        total_usdt = spot_usdt + perp_usdt
+        target_spot = total_usdt * spot_target_pct
+        target_perp = total_usdt * perp_target_pct
+
+        # Calculate transfer needed
+        spot_difference = target_spot - spot_usdt
+
+        result = {
+            'leverage': leverage,
+            'current_spot_usdt': spot_usdt,
+            'current_perp_usdt': perp_usdt,
+            'total_usdt': total_usdt,
+            'target_spot_usdt': target_spot,
+            'target_perp_usdt': target_perp,
+            'spot_target_pct': spot_target_pct * 100,
+            'perp_target_pct': perp_target_pct * 100,
+            'transfer_needed': abs(spot_difference) > 1.0,  # Only transfer if difference > $1
+            'transfer_amount': abs(spot_difference),
+            'transfer_direction': None,
+            'transfer_result': None
+        }
+
+        # Perform transfer if needed (minimum $1 difference to avoid micro-transfers)
+        if abs(spot_difference) > 1.0:
+            transfer_amount = round(abs(spot_difference), 6) # Round to 6 decimal places for safety
+            if spot_difference > 0:
+                # Need to transfer from perp to spot
+                result['transfer_direction'] = 'PERP_TO_SPOT'
+                result['transfer_result'] = await self.transfer_between_spot_and_perp(
+                    'USDT', transfer_amount, 'PERP_TO_SPOT'
+                )
+            else:
+                # Need to transfer from spot to perp
+                result['transfer_direction'] = 'SPOT_TO_PERP'
+                result['transfer_result'] = await self.transfer_between_spot_and_perp(
+                    'USDT', transfer_amount, 'SPOT_TO_PERP'
+                )
+
+        return result
 
     async def rebalance_usdt_50_50(self) -> dict:
         """
@@ -649,18 +732,38 @@ class AsterApiManager:
             'analyzed_positions': analyzed_positions,
         }
 
-    async def prepare_and_execute_dn_position(self, symbol: str, capital_to_deploy: float, dry_run: bool = False) -> Dict[str, Any]:
+    async def get_spot_symbol_filter(self, symbol: str, filter_type: str) -> Optional[Dict]:
+        """Retrieves a specific filter for a spot symbol from exchange info."""
+        try:
+            exchange_info = await self._get_spot_exchange_info()
+            symbol_info = next((s for s in exchange_info.get('symbols', []) if s['symbol'] == symbol), None)
+            if symbol_info:
+                return next((f for f in symbol_info['filters'] if f['filterType'] == filter_type), None)
+        except Exception as e:
+            print(f"Error getting spot filter for {symbol}: {e}")
+        return None
+
+    async def prepare_and_execute_dn_position(self, symbol: str, capital_to_deploy: float, leverage: int = 1, dry_run: bool = False) -> Dict[str, Any]:
         """Prepares and (optionally) executes a delta-neutral position opening."""
         trade_details = {'success': False, 'message': '', 'details': None}
         try:
-            # 1. Fetch required data
-            spot_price_data, lot_size_filter, spot_balances, perp_account = await asyncio.gather(
+            # 1. Fetch required data including BOTH spot and perp LOT_SIZE filters
+            spot_price_data, perp_lot_size_filter, spot_lot_size_filter, spot_balances, perp_account = await asyncio.gather(
                 self.get_spot_book_ticker(symbol),
                 self.get_perp_symbol_filter(symbol, 'LOT_SIZE'),
+                self.get_spot_symbol_filter(symbol, 'LOT_SIZE'),
                 self.get_spot_account_balances(),
                 self.get_perp_account_info()
             )
-            spot_price = float(spot_price_data['bidPrice'])
+            spot_price = Decimal(str(spot_price_data['bidPrice']))
+
+            # 2. Determine coarser LOT_SIZE step size (use the larger one for both markets)
+            perp_step_size = Decimal(perp_lot_size_filter['stepSize']) if perp_lot_size_filter and perp_lot_size_filter.get('stepSize') else Decimal('0.00001')
+            spot_step_size = Decimal(spot_lot_size_filter['stepSize']) if spot_lot_size_filter and spot_lot_size_filter.get('stepSize') else Decimal('0.00001')
+
+            # Use the coarser (larger) step size for calculations to ensure both orders are valid
+            coarser_step_size = max(perp_step_size, spot_step_size)
+            precision = abs(coarser_step_size.as_tuple().exponent)
 
             # Check for existing short position
             raw_perp_positions = [p for p in perp_account.get('positions', []) if float(p.get('positionAmt', 0)) != 0]
@@ -669,48 +772,62 @@ class AsterApiManager:
                 trade_details['message'] = f"Cannot open position. Already have a short position: {existing_short.get('positionAmt')}"
                 return trade_details
 
-            # 2. Set leverage to 1x
-            leverage_set = await self.set_leverage(symbol, 1)
+            # 3. Set leverage (note: leverage is already set in volume_farming_strategy before calling this)
+            # We set it again here as a safety check
+            leverage_set = await self.set_leverage(symbol, leverage)
             if not leverage_set:
-                trade_details['message'] = "Failed to set leverage to 1x."
+                trade_details['message'] = f"Failed to set leverage to {leverage}x."
                 return trade_details
 
-            # 3. Calculate position sizes
+            # 4. Calculate position sizes using Decimal for precision
             base_asset = symbol.replace('USDT', '')
-            existing_spot_quantity = sum(float(b.get('free', '0')) for b in spot_balances if b.get('asset') == base_asset)
+            existing_spot_quantity = Decimal(str(sum(float(b.get('free', '0')) for b in spot_balances if b.get('asset') == base_asset)))
+            capital_to_deploy_decimal = Decimal(str(capital_to_deploy))
+
             sizing = DeltaNeutralLogic.calculate_position_size(
-                total_usd_capital=capital_to_deploy,
-                spot_price=spot_price,
-                existing_spot_usd=(existing_spot_quantity * spot_price)
+                total_usd_capital=float(capital_to_deploy_decimal),
+                spot_price=float(spot_price),
+                leverage=leverage,
+                existing_spot_usd=float(existing_spot_quantity * spot_price)
             )
 
-            # 4. Adjust quantities based on perpetuals lot size filter
-            ideal_perp_qty = sizing['total_perp_quantity_to_short']
-            final_perp_qty = ideal_perp_qty
-            if lot_size_filter and lot_size_filter.get('stepSize'):
-                step_size_str = lot_size_filter['stepSize']
-                precision = abs(Decimal(step_size_str).as_tuple().exponent)
-                final_perp_qty = self._truncate(ideal_perp_qty, precision)
+            # 5. Adjust quantities based on the coarser step size
+            ideal_perp_qty = Decimal(str(sizing['total_perp_quantity_to_short']))
+            final_perp_qty = Decimal(str(self._truncate(float(ideal_perp_qty), precision)))
 
             if final_perp_qty <= 0:
                 trade_details['message'] = "Final perpetual quantity is zero or less after rounding."
                 return trade_details
 
-            # 5. Adjust spot side
-            spot_qty_to_buy = max(0, final_perp_qty - existing_spot_quantity)
+            # 6. Calculate spot side - must match the perp quantity exactly (delta-neutral)
+            # Spot side buys exactly final_perp_qty minus what we already have
+            spot_qty_needed = max(Decimal('0'), final_perp_qty - existing_spot_quantity)
+            # Truncate to coarser step size to ensure both orders use same precision
+            spot_qty_to_buy = Decimal(str(self._truncate(float(spot_qty_needed), precision)))
+
+            # CRITICAL: Recalculate final_perp_qty based on actual achievable spot total
+            # This ensures perfect delta-neutral matching even with misaligned existing balances
+            actual_total_spot = existing_spot_quantity + spot_qty_to_buy
+            final_perp_qty = Decimal(str(self._truncate(float(actual_total_spot), precision)))
+
             spot_capital_to_buy = spot_qty_to_buy * spot_price
 
-            # 6. Prepare details dictionary
+            # 7. Prepare details dictionary
             details = {
                 'symbol': symbol,
-                'capital_to_deploy': capital_to_deploy,
-                'spot_price': spot_price,
-                'lot_size_filter': lot_size_filter,
-                'ideal_perp_qty': ideal_perp_qty,
-                'final_perp_qty': final_perp_qty,
-                'existing_spot_quantity': existing_spot_quantity,
-                'spot_qty_to_buy': spot_qty_to_buy,
-                'spot_capital_to_buy': spot_capital_to_buy
+                'capital_to_deploy': float(capital_to_deploy_decimal),
+                'spot_price': float(spot_price),
+                'perp_lot_size_filter': perp_lot_size_filter,
+                'spot_lot_size_filter': spot_lot_size_filter,
+                'perp_step_size': str(perp_step_size),
+                'spot_step_size': str(spot_step_size),
+                'coarser_step_size': str(coarser_step_size),
+                'precision': precision,
+                'ideal_perp_qty': float(ideal_perp_qty),
+                'final_perp_qty': float(final_perp_qty),
+                'existing_spot_quantity': float(existing_spot_quantity),
+                'spot_qty_to_buy': float(spot_qty_to_buy),
+                'spot_capital_to_buy': float(spot_capital_to_buy)
             }
             trade_details['details'] = details
 
@@ -719,10 +836,11 @@ class AsterApiManager:
                 trade_details['message'] = "Dry run successful. Trade details calculated."
                 return trade_details
 
-            # 7. Execute trades
+            # 8. Execute trades - use exact quantities for both spot and perp (delta-neutral)
+            # IMPORTANT: We use quantity for both, not USDT amount, to ensure exact matching
             exec_results = await asyncio.gather(
-                self.place_perp_market_order(symbol, str(final_perp_qty), 'SELL'),
-                self.place_spot_buy_market_order(symbol, str(spot_capital_to_buy)) if spot_capital_to_buy > 1.0 else asyncio.sleep(0),
+                self.place_perp_market_order(symbol, str(float(final_perp_qty)), 'SELL'),
+                self.place_spot_buy_market_order_by_quantity(symbol, str(float(spot_qty_to_buy))) if spot_qty_to_buy > Decimal('0.0001') else asyncio.sleep(0),
                 return_exceptions=True
             )
 
@@ -945,9 +1063,31 @@ class AsterApiManager:
             result = DeltaNeutralLogic.calculate_funding_rate_ma(rates, periods)
 
             if result:
-                # Add symbol and next funding time
+                # Add symbol and calculate next funding time
                 result['symbol'] = symbol
-                result['next_funding_time'] = history[0].get('fundingTime', 'N/A')
+
+                # Calculate next funding time (funding happens every 8 hours at 00:00, 08:00, 16:00 UTC)
+                from datetime import datetime, timedelta
+                now = datetime.utcnow()
+                current_hour = now.hour
+
+                # Find next funding hour
+                funding_hours = [0, 8, 16]
+                next_funding_hour = None
+                for fh in funding_hours:
+                    if fh > current_hour:
+                        next_funding_hour = fh
+                        break
+
+                if next_funding_hour is None:
+                    # Next funding is tomorrow at 00:00
+                    next_funding = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                else:
+                    # Next funding is today
+                    next_funding = now.replace(hour=next_funding_hour, minute=0, second=0, microsecond=0)
+
+                # Convert to millisecond timestamp
+                result['next_funding_time'] = int(next_funding.timestamp() * 1000)
 
             return result
 
