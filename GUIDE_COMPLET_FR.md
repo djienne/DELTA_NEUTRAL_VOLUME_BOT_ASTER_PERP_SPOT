@@ -1286,24 +1286,6 @@ def _calculate_safe_stoploss(self, leverage: int) -> float:
 | 2x     | -33.0%    | ~33%                 |
 | 3x     | -24.0%    | ~25%                 |
 
-### Explication du Safety Buffer (0.7%)
-
-Le safety buffer inclut :
-
-1. **Frais de trading** : ~0.1%
-   - Fermeture spot : ~0.1%
-   - Fermeture perp : ~0.05%
-
-2. **Slippage** : ~0.2%
-   - Market orders pendant urgence
-   - Moins de liquidité sur gros ordres
-
-3. **Volatilité** : ~0.4%
-   - Mouvement de prix entre détection et exécution
-   - Latence réseau
-
-**Total : 0.7%** → Marge de sécurité confortable
-
 ### Exemple de Calcul (Levier 3x)
 
 ```
@@ -2872,3 +2854,4 @@ Ce bot de trading delta-neutre sur ASTER DEX est un système sophistiqué qui co
 ---
 
 *Document créé le 2025-10-12 | Version 1.0 | Pour ASTER DEX Delta-Neutral Trading Bot*
+
