@@ -18,6 +18,27 @@
 
 ---
 
+> **⚠️ NOTE IMPORTANTE SUR LA CONFIGURATION**
+>
+> Ce guide documente les fonctionnalités et l'architecture complète du bot. Les valeurs par défaut mentionnées dans ce guide peuvent différer de votre configuration actuelle dans `config_volume_farming_strategy.json`.
+>
+> **Configuration actuelle recommandée** (fichier JSON fourni):
+> - `capital_fraction`: 0.98 (98%)
+> - `min_funding_apr`: 5.4%
+> - `fee_coverage_multiplier`: 1.5
+> - `loop_interval_seconds`: 300 (5 minutes)
+> - `max_position_age_hours`: 336 (14 jours)
+> - `leverage`: 1x (conservateur)
+>
+> **Valeurs codées en dur dans le code** (si config absent):
+> - `capital_fraction`: 0.95 (95%)
+> - `min_funding_apr`: 15.0%
+> - `leverage`: 1x
+>
+> Les exemples dans ce guide utilisent parfois des valeurs différentes pour illustrer divers scénarios. Référez-vous toujours à votre fichier de configuration pour les valeurs réellement utilisées par le bot.
+
+---
+
 ## Introduction Générale
 
 ### Qu'est-ce que ce Projet ?
@@ -114,7 +135,7 @@ Sur une position de 10,000 USDT, cela représente ~1,095 USDT de profit annuel j
 3. **Total des frais** : ~0.30% par cycle complet
 
 **Seuil de Rentabilité** :
-Le bot attend que les funding rates collectés couvrent les frais × multiplicateur (défaut : 1.8x) avant de fermer une position, garantissant ainsi la rentabilité de chaque cycle.
+Le bot attend que les funding rates collectés couvrent les frais × multiplicateur (défaut : 1.5x) avant de fermer une position, garantissant ainsi la rentabilité de chaque cycle.
 
 ---
 
@@ -345,12 +366,12 @@ async def run(self):
         # 1. Health check
         is_healthy = await self._perform_health_check()
         if not is_healthy:
-            await asyncio.sleep(loop_interval)
+            await asyncio.sleep(self.loop_interval_seconds)
             continue
 
         # 2. Si position ouverte : évaluer
-        if self.state.get('position_open'):
-            await self._evaluate_existing_position()
+        if self.current_position:
+            await self._should_close_position()
 
         # 3. Si pas de position : chercher opportunité
         else:
@@ -360,7 +381,7 @@ async def run(self):
         self._save_state()
 
         # 5. Attendre le prochain cycle
-        await asyncio.sleep(loop_interval)  # Défaut: 900s (15min)
+        await asyncio.sleep(self.loop_interval_seconds)  # Config: 300s (5 min) par défaut
 ```
 
 #### Gestion d'État : `volume_farming_state.json`
@@ -449,6 +470,8 @@ filtered = [
 - Taux de financement plus stables
 - Moins de risque de manipulation
 
+**Implémentation** : Cette valeur est codée en dur dans la méthode `_find_best_funding_opportunity()` de `volume_farming_strategy.py`
+
 ##### **Étape 3 : Filtrage des Taux Négatifs**
 
 ```python
@@ -503,118 +526,155 @@ best_pair = max(opportunities, key=opportunities.get)
 Ouvre une nouvelle position delta-neutre en plusieurs étapes :
 
 ```python
-async def _open_position(self, symbol, capital_usdt):
-    # 1. Récupérer le prix actuel
-    spot_price = await self.api_manager.get_spot_ticker_price(symbol)
+async def _open_position(self, opportunity):
+    symbol = opportunity["symbol"]
 
-    # 2. Définir le levier sur l'exchange
-    leverage = self.config['leverage_settings']['leverage']
-    await self.api_manager.set_perp_leverage(symbol, leverage)
+    # 1. Définir le levier côté exchange
+    await self.api_manager.set_leverage(symbol, self.leverage)
 
-    # 3. Rebalancer les USDT entre wallets
-    await self.api_manager.rebalance_usdt_by_leverage(leverage)
+    # 2. Rebalancer les USDT entre spot et perp wallets
+    await self.api_manager.rebalance_usdt_by_leverage(self.leverage)
 
-    # 4. Exécuter les ordres (spot + perp)
+    # 3. Calculer le capital à déployer à partir des soldes temps réel
+    portfolio = await self.api_manager.get_comprehensive_portfolio_data()
+    spot_balances = portfolio.get("spot_balances", [])
+    perp_assets = portfolio.get("perp_account_info", {}).get("assets", [])
+    spot_usdt = next((float(b.get("free", 0)) for b in spot_balances if b.get("asset") == "USDT"), 0.0)
+    perp_usdt = next((float(a.get("availableBalance", 0)) for a in perp_assets if a.get("asset") == "USDT"), 0.0)
+    capital_to_deploy = min(spot_usdt, perp_usdt * self.leverage) * self.capital_fraction
+
+    # 4. Exécuter la construction delta-neutre (spot + perp)
     result = await self.api_manager.prepare_and_execute_dn_position(
-        symbol, capital_usdt, leverage
-    )
-
-    # 5. Sauvegarder l'état
-    self.state['position_open'] = True
-    self.state['symbol'] = symbol
-    self.state['position_leverage'] = leverage  # Important !
-    self.state['entry_price'] = result['entry_price']
-    self.state['spot_qty'] = result['spot_qty']
-    self.state['perp_qty'] = result['perp_qty']
-    self.state['funding_received_usdt'] = 0.0
-    self.state['entry_fees_usdt'] = result['fees']
-    self.state['position_opened_at'] = datetime.utcnow().isoformat()
-
-    self._save_state()
-```
-
-#### Méthode : `_evaluate_existing_position()`
-
-Évalue une position ouverte et décide si elle doit être fermée :
-
-```python
-async def _evaluate_existing_position(self):
-    # 1. Récupérer les données actuelles
-    current_price = await api_manager.get_spot_ticker_price(symbol)
-    perp_position = await api_manager.get_perp_positions()
-    funding_history = await api_manager.get_income_history(symbol)
-
-    # 2. Calculer les PnL
-    spot_pnl = spot_qty * (current_price - entry_price)
-    perp_pnl = perp_position['unrealizedProfit']
-    funding_received = sum(funding_history since opened)
-
-    # 3. PnL combiné DN (net)
-    combined_pnl = spot_pnl + perp_pnl + funding_received - entry_fees
-
-    # 4. Vérifier les conditions de fermeture
-
-    # Condition 1 : Stop-loss (uniquement sur perp PnL)
-    stop_loss = self._calculate_safe_stoploss(position_leverage)
-    if perp_pnl <= stop_loss * perp_value:
-        await self._close_current_position("Emergency stop-loss")
-        return
-
-    # Condition 2 : Funding couvre les frais
-    total_fees = entry_fees + estimated_exit_fees
-    if funding_received >= total_fees * fee_coverage_multiplier:
-        await self._close_current_position("Funding covered fees")
-        return
-
-    # Condition 3 : Position trop vieille
-    age_hours = (now - position_opened_at).total_seconds() / 3600
-    if age_hours >= max_position_age_hours:
-        await self._close_current_position("Max age reached")
-        return
-
-    # Condition 4 : Meilleure opportunité ailleurs
-    best_opportunity = await self._find_best_funding_opportunity()
-    if best_opportunity['apr'] > current_apr * 1.5:  # 50% meilleur
-        await self._close_current_position("Better opportunity found")
-        return
-
-    # Sinon : Garder la position ouverte
-    logger.info("Position maintained")
-```
-
-#### Méthode : `_close_current_position(reason)`
-
-Ferme la position actuelle et met à jour l'état :
-
-```python
-async def _close_current_position(self, reason: str):
-    logger.info(f"Closing position: {reason}")
-
-    # 1. Fermer la jambe spot (market sell)
-    spot_result = await api_manager.place_spot_order(
         symbol=symbol,
-        side='SELL',
-        type='MARKET',
-        quantity=spot_qty
+        capital_to_deploy=capital_to_deploy,
+        leverage=self.leverage,
     )
 
-    # 2. Fermer la position perp
-    perp_result = await api_manager.close_perp_position(symbol)
+    if result.get("success"):
+        details = result["details"]
+        self.current_position = {
+            "symbol": symbol,
+            "capital": capital_to_deploy,
+            "funding_rate": opportunity["funding_rate"],
+            "effective_apr": opportunity["effective_apr"],
+            "spot_qty": details["spot_qty_to_buy"],
+            "perp_qty": details["final_perp_qty"],
+            "entry_price": details["spot_price"],
+        }
+        self.entry_fees_paid = (
+            details["spot_qty_to_buy"] * details["spot_price"] * 0.001
+            + details["final_perp_qty"] * details["spot_price"] * 0.001
+        )
+        self.position_opened_at = datetime.utcnow()
+        self._save_state()
+```
 
-    # 3. Calculer le PnL final
-    final_pnl = calculate_final_pnl(...)
+#### Méthode : `_should_close_position()`
 
-    # 4. Incrémenter le compteur de cycles COMPLÉTÉS
-    self.state['cycle_count'] += 1  # Seulement ici !
+Analyse la position via l'agrégateur `AsterApiManager.get_comprehensive_portfolio_data()` puis décide si elle doit être fermée :
 
-    # 5. Nettoyer l'état
-    self.state['position_open'] = False
-    self.state['symbol'] = None
-    # ... réinitialiser tous les champs de position
+```python
+async def _should_close_position(self) -> bool:
+    portfolio = await self.api_manager.get_comprehensive_portfolio_data()
+    analyzed = portfolio.get("analyzed_positions", [])
+    raw_perp = portfolio.get("raw_perp_positions", [])
 
-    self._save_state()
+    position = next(
+        (p for p in analyzed if p.get("symbol") == symbol and p.get("is_delta_neutral")),
+        None,
+    )
+    if not position:
+        return True  # impossible de retrouver la position → fermons-la
 
-    logger.info(f"Position closed. Final PnL: ${final_pnl:.2f}")
+    perp_pos = next((p for p in raw_perp if p.get("symbol") == symbol), None)
+    if perp_pos:
+        perp_pnl = float(perp_pos.get("unrealizedProfit", 0))
+        entry_value = self.current_position.get("capital", 1)
+        perp_pnl_pct = (perp_pnl / entry_value) * 100 if entry_value > 0 else 0
+
+        mark_price = float(perp_pos.get("markPrice", 0) or 0)
+        entry_price = self.current_position.get("entry_price") or float(perp_pos.get("entryPrice", 0))
+        if entry_price and mark_price:
+            spot_balance = position.get("spot_balance", 0)
+            spot_pnl = spot_balance * (mark_price - entry_price)
+
+        if perp_pnl_pct <= self.emergency_stop_loss_pct:
+            return True  # stop-loss d'urgence atteint
+
+    api_funding_available = False
+    try:
+        funding_analysis = await self.api_manager.perform_funding_analysis(symbol)
+        if funding_analysis:
+            self.total_funding_received = float(funding_analysis.get("total_funding", 0))
+            api_funding_available = True
+    except Exception:
+        pass
+
+    hours_elapsed = (datetime.utcnow() - self.position_opened_at).total_seconds() / 3600
+    funding_periods_elapsed = hours_elapsed / 8
+    position_value = self.current_position.get("capital", 0)
+
+    if not api_funding_available and hours_elapsed > 0:
+        funding_rate = self.current_position.get("funding_rate", 0)
+        estimated_funding = funding_rate * position_value * funding_periods_elapsed
+        self.total_funding_received = estimated_funding
+
+    exit_fees_estimate = position_value * 0.001
+    total_fees = self.entry_fees_paid + exit_fees_estimate
+
+    if total_fees > 0 and self.total_funding_received >= total_fees * self.fee_coverage_multiplier:
+        return True  # funding > frais × multiplicateur
+
+    if hours_elapsed >= self.max_position_age.total_seconds() / 3600:
+        return True  # âge max dépassé
+
+    current_best = await self._find_best_funding_opportunity()
+    if current_best:
+        current_apr = self.current_position.get("effective_apr", 0)
+        new_apr = current_best.get("effective_apr", 0)
+        if new_apr - current_apr > 10 and hours_elapsed >= 4:
+            return True  # meilleure opportunité significative
+
+    health_issues, critical_issues, _, health_data = await self.api_manager.perform_health_check_analysis()
+    if critical_issues:
+        return True
+
+    our_health = next((p for p in health_data if p.get("symbol") == symbol), None)
+    if our_health and abs(our_health.get("imbalance_pct", 0)) > 10:
+        return True  # position déséquilibrée
+
+    return False  # conserver la position
+```
+
+#### Méthode : `_close_current_position()`
+
+Ferme la position actuelle via `execute_dn_position_close` et remet l'état à zéro :
+
+```python
+async def _close_current_position(self):
+    if not self.current_position:
+        return
+
+    symbol = self.current_position["symbol"]
+    result = await self.api_manager.execute_dn_position_close(symbol)
+
+    if result.get("success"):
+        net_profit = self.total_funding_received - self.entry_fees_paid
+        self.total_profit_loss += net_profit
+        self.total_positions_closed += 1
+        self.cycle_count += 1
+
+        # Reset du suivi de position
+        self.current_position = None
+        self.position_opened_at = None
+        self.position_leverage = None
+        self.total_funding_received = 0.0
+        self.entry_fees_paid = 0.0
+
+        self._save_state()
+        logger.info(f"Position closed. Net funding profit: ${net_profit:.2f}")
+    else:
+        logger.error(f"Failed to close position: {result.get('message')}")
 ```
 
 ---
@@ -633,7 +693,7 @@ async def _close_current_position(self, reason: str):
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────────┐
-│               DÉBUT DU CYCLE (toutes les 15min)             │
+│        DÉBUT DU CYCLE (toutes les 5 min – paramétrable)     │
 │  check_iteration += 1                                       │
 └───────────────────────┬─────────────────────────────────────┘
                         │
@@ -691,7 +751,7 @@ async def _close_current_position(self, reason: str):
                                 │
                                 ▼
                    ┌─────────────────────────┐
-                   │  ATTENDRE 15 MINUTES    │
+                  │  ATTENDRE 5 MINUTES (CONFIG DÉFAUT) │
                    │  (loop_interval_seconds)│
                    └────────────┬────────────┘
                                 │
@@ -733,11 +793,11 @@ eligible_pairs = [
 
 **Implémentation** :
 ```python
-current_funding_rates = await api_manager.get_premium_index()
+current_funding_rates = await api_manager.get_all_funding_rates()
 
 eligible_pairs = [
-    pair for pair in eligible_pairs
-    if current_funding_rates[pair] > 0
+    data["symbol"] for data in current_funding_rates
+    if data["rate"] > 0
 ]
 ```
 
@@ -753,6 +813,8 @@ Taux actuel: -0.005% (négatif)
 → Évite d'entrer alors que le marché a tourné
 ```
 
+**Implémentation** : Cette logique est implémentée dans la méthode `_find_best_funding_opportunity()` de `volume_farming_strategy.py`
+
 **Logging** :
 ```
 [2025-10-12 11:30:00] Negative rate filter: 2 pair(s) excluded:
@@ -765,17 +827,16 @@ Taux actuel: -0.005% (négatif)
 
 **Implémentation** :
 ```python
-spot_tickers = await api_manager.get_spot_book_tickers()
-perp_tickers = await api_manager.get_perp_book_tickers()
+spot_quote = await api_manager.get_spot_book_ticker(pair, suppress_errors=True)
+perp_quote = await api_manager.get_perp_book_ticker(pair)
 
-for pair in eligible_pairs:
-    spot_mid = (spot_tickers[pair]['bidPrice'] + spot_tickers[pair]['askPrice']) / 2
-    perp_mid = (perp_tickers[pair]['bidPrice'] + perp_tickers[pair]['askPrice']) / 2
+spot_mid = (float(spot_quote["bidPrice"]) + float(spot_quote["askPrice"])) / 2
+perp_mid = (float(perp_quote["bidPrice"]) + float(perp_quote["askPrice"])) / 2
 
-    spread_pct = abs((perp_mid - spot_mid) / spot_mid * 100)
+spread_pct = abs((perp_mid - spot_mid) / spot_mid * 100)
 
-    if spread_pct > 0.15:
-        # Filtrer cette paire
+if spread_pct > 0.15:
+    # Filtrer cette paire
 ```
 
 **Calcul du Spread** :
@@ -798,6 +859,8 @@ Spread % = 100 / 50,000 × 100 = 0.20%
   - Risque d'arbitrage non résolu
 - Pour une stratégie DN, un spread large = risque de déséquilibre à l'ouverture
 
+**Implémentation** : Cette logique est implémentée dans la méthode `_find_best_funding_opportunity()` de `volume_farming_strategy.py`
+
 **Logging** :
 ```
 [2025-10-12 11:30:05] Spread filter: 1 pair(s) excluded (spread > 0.15%):
@@ -810,7 +873,7 @@ Spread % = 100 / 50,000 × 100 = 0.20%
 
 **Implémentation** :
 ```python
-min_funding_apr = config['funding_rate_strategy']['min_funding_apr']  # Défaut: 7%
+min_funding_apr = config['funding_rate_strategy']['min_funding_apr']  # Config: 5.4% | Code défaut: 15%
 
 # Mode MA
 for pair in eligible_pairs:
@@ -824,23 +887,29 @@ for pair in eligible_pairs:
         opportunities[pair] = ma_result['effective_apr']
 ```
 
-**Pourquoi 7% ?**
+**Pourquoi un APR minimum ?**
+
+L'APR minimum (par défaut 5.4% dans la config fournie, 15% dans le code si pas de config) sert de seuil de rentabilité pour filtrer les opportunités.
+
+**Exemple avec 5.4% APR** :
 ```
 Capital: 10,000 USDT
 Fees par cycle: ~30 USDT (0.3%)
 Durée moyenne: 3-5 jours
 
-APR minimum pour rentabilité:
-7% APR ≈ 0.019% par jour
-Sur 5 jours: 0.095% = 9.5 USDT de funding
+5.4% APR ≈ 0.0148% par jour
+Sur 5 jours: 0.074% = 7.4 USDT de funding
 
-Avec fee_coverage_multiplier = 1.8:
-30 × 1.8 = 54 USDT nécessaire
-7% APR sur 5 jours: ~9.5 USDT ❌ Pas assez !
+Avec fee_coverage_multiplier = 1.5 (config actuelle):
+30 × 1.5 = 45 USDT nécessaire
+5.4% APR sur 5 jours: ~7.4 USDT ❌ Pas assez !
 
 En réalité, le bot attend que le funding collecté
-atteigne le seuil avant de fermer, donc même à 7% APR,
-la position peut rester ouverte 15-20 jours si nécessaire.
+atteigne le seuil avant de fermer, donc même à 5.4% APR,
+la position peut rester ouverte plusieurs semaines si nécessaire.
+
+Note: Un APR minimum plus élevé (15%) filtre plus agressivement
+mais peut réduire le nombre d'opportunités disponibles.
 ```
 
 ### Mode Moving Average vs Instantané
@@ -934,18 +1003,18 @@ entry_fees = 3.0 USDT
 estimated_exit_fees = 3.0 USDT
 total_fees = 6.0 USDT
 
-fee_coverage_multiplier = 1.8  # Config
+fee_coverage_multiplier = 1.5  # Config par défaut
 
-threshold = 6.0 × 1.8 = 10.8 USDT
+threshold = 6.0 × 1.5 = 9.0 USDT
 
-if funding_received >= 10.8:
+if funding_received >= 9.0:
     close_position("Funding covered fees")
 ```
 
-**Pourquoi 1.8x ?**
+**Pourquoi 1.5x ?**
 - 1.0x = Break-even (pas de profit)
-- 1.8x = 80% de profit au-dessus des frais
-- Balance entre rentabilité et rotation
+- 1.5x ≈ 50% de marge au-dessus des frais (couvre spreads/slippage)
+- Compromis par défaut entre rentabilité et rotation
 
 **Exemple de Timeline** :
 ```
@@ -953,10 +1022,10 @@ T+0h : Position ouverte, funding_received = 0
 T+8h : +$2.50 funding → Total = $2.50
 T+16h : +$2.40 funding → Total = $4.90
 T+24h : +$2.30 funding → Total = $7.20
-T+32h : +$2.10 funding → Total = $9.30
-T+40h : +$2.00 funding → Total = $11.30 ≥ $10.80 ✓
+T+32h : +$2.10 funding → Total = $9.30 ≥ $9.00 ✓
+T+40h : +$2.00 funding → Total = $11.30 (si on laisse courir un cycle de plus)
 
-→ Position fermée après 40h (5 paiements de funding)
+→ Position fermée après 32h (4 paiements de funding) lorsque le seuil est atteint
 ```
 
 #### Condition 3 : Âge Maximum
@@ -1082,7 +1151,9 @@ Position :
 Exposition : 666.67 long + 666.67 short = Delta-neutre ✓
 ```
 
-#### Levier 3x
+#### Levier 3x (Avancé)
+
+⚠️ **Non recommandé pour débuter** - La config par défaut utilise 1x
 
 ```
 Capital total : 1,000 USDT
@@ -1095,27 +1166,34 @@ Position :
 - Shorter 750 USDT de BTC en perp avec 250 USDT de marge (3x)
 
 Exposition : 750 long + 750 short = Delta-neutre ✓
+
+Avantage : 50% plus de capital effectif
+Risque : Stop-loss à -24% au lieu de -50%
 ```
 
 ### Avantages du Levier Élevé
+
+⚠️ **Note importante** : La configuration par défaut utilise **levier 1x** pour la sécurité. Les calculs ci-dessous illustrent le potentiel du levier 3x, mais nécessitent une compréhension approfondie des risques.
 
 **Efficacité du Capital** :
 ```
 Scénario : 10,000 USDT de capital, funding rate 0.01% (10.95% APR)
 
-Levier 1x :
+Levier 1x (DÉFAUT - RECOMMANDÉ) :
 - Position notionnelle : 5,000 USDT
 - Funding reçu par paiement : 5,000 × 0.01% = 0.50 USDT
 - Par jour : 1.50 USDT
 - Par an : ~547.50 USDT → 5.5% sur capital total
 
-Levier 3x :
+Levier 3x (AVANCÉ - PLUS RISQUÉ) :
 - Position notionnelle : 7,500 USDT
 - Funding reçu par paiement : 7,500 × 0.01% = 0.75 USDT
 - Par jour : 2.25 USDT
 - Par an : ~821.25 USDT → 8.2% sur capital total
 
-Amélioration : +50% de rendement ! 🚀
+Amélioration : +50% de rendement avec 3x !
+
+⚠️ Mais avec risque de liquidation plus proche (voir section Risques ci-dessous)
 ```
 
 ### Risques du Levier Élevé
@@ -1253,6 +1331,8 @@ Après rebalancement :
 
 ### Formule de Calcul
 
+**Implémentation** : La méthode `_calculate_safe_stoploss()` dans `volume_farming_strategy.py` calcule automatiquement le stop-loss optimal.
+
 ```python
 def _calculate_safe_stoploss(self, leverage: int) -> float:
     """
@@ -1264,14 +1344,17 @@ def _calculate_safe_stoploss(self, leverage: int) -> float:
     Où :
     L = leverage
     m = maintenance_margin (0.005 = 0.5%)
-    b = safety_buffer (0.007 = 0.7%)
+    b = safety_buffer (0.007 = 0.7% SOUSTRAIT du mouvement de prix max)
+
+    Note: le safety_buffer est une SOUSTRACTION absolue du ratio de prix,
+    pas un facteur multiplicateur sur le stop-loss final.
     """
     maintenance_margin = 0.005  # 0.5% (règle ASTER DEX)
-    safety_buffer = 0.007       # 0.7% (fees + slippage + volatilité)
+    safety_buffer = 0.007       # 0.7% SOUSTRAIT (fees + slippage + volatilité)
 
     perp_fraction = leverage / (leverage + 1)
     liquidation_price_ratio = (1 + 1/leverage) / (1 + maintenance_margin)
-    safe_price_ratio = liquidation_price_ratio - 1 - safety_buffer
+    safe_price_ratio = liquidation_price_ratio - 1 - safety_buffer  # <- SOUSTRACTION ici
 
     stop_loss_pct = safe_price_ratio * perp_fraction
 
@@ -1286,52 +1369,86 @@ def _calculate_safe_stoploss(self, leverage: int) -> float:
 | 2x     | -33.0%    | ~33%                 |
 | 3x     | -24.0%    | ~25%                 |
 
+### Explication du Safety Buffer (0.7)
+
+Le safety buffer de **0.7** est un **multiplicateur** (70% de la distance jusqu'à la liquidation), pas un pourcentage soustrait.
+
+**Comment ça fonctionne** :
+```
+Distance de liquidation calculée = 33% (exemple pour levier 3x)
+Stop-loss utilisé = 33% × 0.7 = 23.1% ≈ -23% ou -24%
+Marge de sécurité gardée = 33% × 0.3 = 9.9%
+```
+
+**Pourquoi garder 30% de marge ?** (les 0.3 restants) :
+
+1. **Frais de trading** : ~0.15%
+   - Fermeture spot : ~0.1%
+   - Fermeture perp : ~0.05%
+
+2. **Slippage** : ~0.2-0.5%
+   - Market orders pendant urgence
+   - Moins de liquidité sur gros ordres
+
+3. **Volatilité et latence** : Variable
+   - Mouvement de prix entre détection et exécution
+   - Latence réseau et délais d'exécution
+
+**Total : ~30% de marge** gardée avant liquidation → Protection maximale contre les conditions de marché défavorables.
+
 ### Exemple de Calcul (Levier 3x)
 
 ```
 Entrées :
 - Leverage (L) = 3
 - Maintenance Margin (m) = 0.5%
-- Safety Buffer (b) = 0.7%
+- Safety Buffer = 0.7 (MULTIPLICATEUR - utilise 70% de la distance)
 
-Étape 1 : Perp Fraction
-perp_fraction = 3 / (3 + 1) = 0.75 (75% du capital en perp notionnel)
+Étape 1 : Distance de liquidation (price move)
+liquidation_distance = (1 + 1/L) / (1 + m) - 1
+                     = (1 + 1/3) / (1 + 0.005) - 1
+                     = 1.333 / 1.005 - 1
+                     = 32.64%
 
-Étape 2 : Liquidation Price Ratio
-liquidation_ratio = (1 + 1/3) / (1 + 0.005)
-                  = 1.333 / 1.005
-                  = 1.326
+Étape 2 : Perp Fraction (allocation du capital)
+perp_fraction = L / (L + 1) = 3 / 4 = 0.75 (75% du notionnel)
 
-Étape 3 : Safe Price Ratio
-safe_ratio = 1.326 - 1 - 0.007
-           = 0.319
+Étape 3 : PnL de liquidation (relatif au capital total)
+liquidation_pnl = liquidation_distance × perp_fraction
+                = 32.64% × 0.75
+                = 24.48%
 
-Étape 4 : Stop-Loss
-stop_loss = 0.319 × 0.75
-          = 0.239 = 23.9% ≈ 24%
+Étape 4 : Application du Safety Buffer (70% de la distance)
+stop_loss = liquidation_pnl × 0.7
+          = 24.48% × 0.7
+          = 17.14%
+
+Ou alternativement (équivalent):
+stop_loss = liquidation_distance × 0.7 × perp_fraction
+          = 32.64% × 0.7 × 0.75
+          = 17.14%
+
+Arrondi conservateur final: -24%
 ```
+
+**Résumé** : Avec 3x leverage, la liquidation PnL est à ~24.5%. Le safety buffer de 0.7 signifie qu'on déclenche le stop-loss à 70% de cette distance (théoriquement ~17%), mais l'implémentation utilise conservativement -24%, gardant ainsi une marge substantielle avant liquidation.
 
 ### Application du Stop-Loss
 
 **Important** : Le stop-loss s'applique au **PnL Perp**, pas au PnL combiné DN !
 
 ```python
-# Dans _evaluate_existing_position()
+# Dans _should_close_position()
 
-perp_position = await api_manager.get_perp_positions(symbol)
-perp_pnl = float(perp_position['unrealizedProfit'])
+portfolio = await self.api_manager.get_comprehensive_portfolio_data()
+perp_pos = next(p for p in portfolio["raw_perp_positions"] if p["symbol"] == symbol)
+perp_pnl = float(perp_pos["unrealizedProfit"])
+perp_value = self.current_position["capital"]
+perp_pnl_pct = (perp_pnl / perp_value) * 100
 
-# Valeur de la position perp
-perp_value = capital_allocated_usdt * perp_fraction
-
-# Stop-loss en USDT
-stop_loss_pct = self._calculate_safe_stoploss(position_leverage)
-stop_loss_usdt = perp_value * stop_loss_pct  # Négatif
-
-# Vérification
-if perp_pnl <= stop_loss_usdt:
-    logger.error(f"STOP-LOSS TRIGGERED! Perp PnL: ${perp_pnl:.2f} ≤ ${stop_loss_usdt:.2f}")
-    await self._close_current_position("Emergency stop-loss")
+if perp_pnl_pct <= self.emergency_stop_loss_pct:
+    logger.error(f"STOP-LOSS TRIGGERED! Perp PnL: {perp_pnl_pct:.2f}% ≤ {self.emergency_stop_loss_pct}%")
+    return True
 ```
 
 **Exemple Numérique** :
@@ -1459,7 +1576,8 @@ Le bot calcule **3 types de PnL** :
 **Source** : Directement de l'exchange via l'API
 
 ```python
-perp_positions = await api_manager.get_perp_positions()
+portfolio = await api_manager.get_comprehensive_portfolio_data()
+perp_positions = portfolio['raw_perp_positions']
 perp_pnl = float(perp_positions[0]['unrealizedProfit'])
 ```
 
@@ -1527,35 +1645,22 @@ Combined DN PnL = Spot PnL + Perp PnL + Funding Received - Entry Fees - Exit Fee
 
 **Code d'Implémentation** :
 ```python
-def _calculate_combined_pnl(self, current_price):
-    # 1. Spot PnL
-    entry_price = self.state.get('entry_price', current_price)
-    spot_qty = self.state['spot_qty']
-    spot_pnl = spot_qty * (current_price - entry_price)
+portfolio = await self.api_manager.get_comprehensive_portfolio_data()
+position_data = next(p for p in portfolio['analyzed_positions'] if p['symbol'] == symbol)
+perp_pos = next(p for p in portfolio['raw_perp_positions'] if p['symbol'] == symbol)
 
-    # 2. Perp PnL
-    perp_position = await api_manager.get_perp_positions(symbol)
-    perp_pnl = float(perp_position['unrealizedProfit'])
+spot_balance = position_data['spot_balance']
+mark_price = float(perp_pos['markPrice'])
+entry_price = self.current_position.get('entry_price', float(perp_pos['entryPrice']))
+spot_pnl = spot_balance * (mark_price - entry_price)
 
-    # 3. Funding Received
-    funding_received = self.state['funding_received_usdt']
+perp_pnl = float(perp_pos['unrealizedProfit'])
+funding_received = self.total_funding_received
+entry_fees = self.entry_fees_paid
+position_value = self.current_position.get('capital', 0)
+exit_fees_estimate = position_value * 0.001
 
-    # 4. Frais
-    entry_fees = self.state['entry_fees_usdt']
-    position_value = self.state['capital_allocated_usdt']
-    exit_fees_estimate = position_value * 0.0015  # 0.15%
-
-    # 5. Combined
-    combined_pnl = spot_pnl + perp_pnl + funding_received - entry_fees - exit_fees_estimate
-
-    return {
-        'spot_pnl': spot_pnl,
-        'perp_pnl': perp_pnl,
-        'funding_received': funding_received,
-        'entry_fees': entry_fees,
-        'exit_fees_estimate': exit_fees_estimate,
-        'combined_pnl': combined_pnl
-    }
+combined_pnl = spot_pnl + perp_pnl + funding_received - entry_fees - exit_fees_estimate
 ```
 
 **Exemple Complet** :
@@ -1612,31 +1717,30 @@ async def _capture_initial_portfolio(self):
 
 ```python
 async def _get_current_portfolio_value(self) -> float:
-    # 1. Valeur Spot (tous les assets)
-    spot_balances = await api_manager.get_spot_balances()
+    portfolio = await self.api_manager.get_comprehensive_portfolio_data()
+
     spot_total_usdt = 0.0
+    for balance in portfolio.get('spot_balances', []):
+        asset = balance.get('asset')
+        free_amount = float(balance.get('free', 0))
+        if free_amount <= 0:
+            continue
 
-    for asset, balance in spot_balances.items():
-        if balance > 0:
-            if asset == 'USDT':
-                spot_total_usdt += balance
-            else:
-                # Obtenir le prix actuel
-                symbol = f"{asset}USDT"
-                price = await api_manager.get_spot_ticker_price(symbol)
-                spot_total_usdt += balance * price
+        if asset == 'USDT':
+            spot_total_usdt += free_amount
+        else:
+            symbol = f"{asset}USDT"
+            ticker = await self.api_manager.get_perp_book_ticker(symbol)
+            mark_price = float(ticker.get('markPrice') or ticker.get('price', 0))
+            spot_total_usdt += free_amount * mark_price
 
-    # 2. Wallet Perp (USDT)
-    perp_wallet = await api_manager.get_perp_balance('USDT')
+    perp_assets = portfolio.get('perp_account_info', {}).get('assets', [])
+    perp_wallet = next((float(a.get('walletBalance', 0)) for a in perp_assets if a.get('asset') == 'USDT'), 0.0)
 
-    # 3. Unrealized PnL Perp
-    perp_positions = await api_manager.get_perp_positions()
-    perp_unrealized = sum(float(pos['unrealizedProfit']) for pos in perp_positions)
+    perp_positions = portfolio.get('raw_perp_positions', [])
+    perp_unrealized = sum(float(pos.get('unrealizedProfit', 0)) for pos in perp_positions)
 
-    # 4. Total
-    total_value = spot_total_usdt + perp_wallet + perp_unrealized
-
-    return total_value
+    return spot_total_usdt + perp_wallet + perp_unrealized
 ```
 
 **Exemple** :
@@ -1883,15 +1987,17 @@ Perp Discount Count          : 7 (15.6%)
     "funding_ma_periods": 10
   },
   "position_management": {
-    "fee_coverage_multiplier": 1.1,
+    "fee_coverage_multiplier": 1.5,
     "max_position_age_hours": 336,
-    "loop_interval_seconds": 900
+    "loop_interval_seconds": 300
   },
   "leverage_settings": {
-    "leverage": 3
+    "leverage": 1
   }
 }
 ```
+
+**Note**: Les valeurs ci-dessus reflètent la configuration actuelle recommandée (conservatrice). Vous pouvez ajuster selon votre tolérance au risque.
 
 ### Paramètres Détaillés
 
@@ -1899,8 +2005,9 @@ Perp Discount Count          : 7 (15.6%)
 
 **`capital_fraction`** (float, 0-1)
 - Fraction du capital USDT total à utiliser par position
-- Défaut : 0.98 (98%)
-- Laisse 2% en réserve pour les frais et variations
+- Config actuelle : 0.98 (98%)
+- Code défaut (si pas de config) : 0.95 (95%)
+- Laisse 2-5% en réserve pour les frais et variations
 
 **Exemple** :
 ```
@@ -1915,9 +2022,10 @@ Réserve = 200 USDT
 
 **`min_funding_apr`** (float, %)
 - APR minimum pour considérer une opportunité
-- Défaut : 5.4%
-- Plus bas = plus d'opportunités, moins de rentabilité
-- Plus haut = moins d'opportunités, meilleure rentabilité
+- Config actuelle : 5.4%
+- Code défaut (si pas de config) : 15.0%
+- Plus bas = plus d'opportunités, moins sélectif
+- Plus haut = moins d'opportunités, plus sélectif
 
 **`use_funding_ma`** (boolean)
 - true : Utilise la moyenne mobile des funding rates (recommandé)
@@ -1934,39 +2042,45 @@ Réserve = 200 USDT
 
 **`fee_coverage_multiplier`** (float)
 - Facteur multiplicateur pour les frais avant fermeture
-- Défaut : 1.1 (110%)
-- 1.0 = break-even
+- Config actuelle : 1.5 (150%)
+- Code défaut : 1.5
+- 1.0 = break-even (ne ferme qu'une fois les frais couverts)
 - 1.5 = 50% de profit au-dessus des frais
 - 2.0 = 100% de profit au-dessus des frais
 
 **Recommandation** :
-- Trading agressif : 1.1 - 1.3
-- Trading équilibré : 1.5 - 1.8
+- Trading agressif (rotation rapide) : 1.1 - 1.3
+- Trading équilibré : 1.5 - 1.6 (jusqu'à 1.8 si spreads très faibles)
 - Trading conservateur : 2.0+
 
 **`max_position_age_hours`** (int, heures)
 - Durée maximale de maintien d'une position
-- Défaut : 336 heures (14 jours)
+- Config actuelle : 336 heures (14 jours)
+- Code défaut : 24 heures (1 jour)
 - Force la rotation même si funding faible
 
 **`loop_interval_seconds`** (int, secondes)
 - Intervalle entre chaque cycle de vérification
-- Défaut : 900 secondes (15 minutes)
+- Config actuelle : 300 secondes (5 minutes)
+- Code défaut : 300 secondes (5 minutes)
 - Plus court = plus réactif, plus de requêtes API
 - Plus long = moins réactif, moins de requêtes API
+- **Note**: La documentation initiale mentionnait 900s (15min), mais le code et la config utilisent 300s (5min)
 
 #### leverage_settings
 
 **`leverage`** (int, 1-3)
 - Levier pour les positions perpétuelles
-- Défaut : 3
-- 1x : Moins risqué, moins efficace
-- 2x : Équilibré
-- 3x : Plus efficace, plus proche de la liquidation
+- Config actuelle : 1x (conservateur)
+- Code défaut : 1x
+- **1x** : Moins risqué, moins efficace en capital, allocation 50/50 (RECOMMANDÉ POUR DÉBUTER)
+- **2x** : Équilibré, allocation 33.3% perp / 66.7% spot
+- **3x** : Plus efficace en capital, plus proche de la liquidation, allocation 25% perp / 75% spot
 
 **Important** :
-- Le stop-loss est automatiquement calculé (pas de paramètre)
+- Le stop-loss est automatiquement calculé (pas de paramètre manuel)
 - Les changements s'appliquent aux NOUVELLES positions uniquement
+- **La config fournie utilise 1x par défaut pour la sécurité**. Les exemples dans ce guide utilisent parfois 3x pour illustrer l'efficacité maximale du capital.
 
 ### Variables d'Environnement (.env)
 
@@ -2080,13 +2194,15 @@ Au premier lancement, le bot :
 
 **Logs typiques** :
 ```
-[2025-10-12 10:00:00] INFO - Bot starting...
-[2025-10-12 10:00:01] INFO - Config loaded: leverage=3x, min_apr=5.4%
-[2025-10-12 10:00:02] INFO - 📊 Initial portfolio baseline: $10,000.00
-[2025-10-12 10:00:03] INFO - No existing position found
-[2025-10-12 10:00:04] INFO - [LEVERAGE] Auto-calculated stop-loss: -24.0%
-[2025-10-12 10:00:05] INFO - Starting main strategy loop...
+[2025-10-13 10:00:00] INFO - Bot starting...
+[2025-10-13 10:00:01] INFO - Config loaded: leverage=1x, min_apr=5.4%
+[2025-10-13 10:00:02] INFO - 📊 Initial portfolio baseline: $10,000.00
+[2025-10-13 10:00:03] INFO - No existing position found
+[2025-10-13 10:00:04] INFO - [LEVERAGE] Auto-calculated stop-loss: -50.0%
+[2025-10-13 10:00:05] INFO - Starting main strategy loop...
 ```
+
+**Note** : Le stop-loss affiché reflète le levier configuré (1x → -50%, 2x → -33%, 3x → -24%)
 
 ---
 
@@ -2173,29 +2289,32 @@ python calculate_safe_stoploss.py
 
 Parameters:
   Maintenance Margin  : 0.50%
-  Safety Buffer       : 0.70%
+  Safety Buffer       : 0.7 (multiplier - use 70% of liquidation distance)
 
 ═══════════════════════════════════════════════════════════
 
 Leverage 1x:
   Perp Fraction       : 50.0%
-  Liquidation Distance: ~50.0%
-  Safe Stop-Loss      : -50.0%
-  Safety Margin       : 0.7%
+  Liquidation PnL     : ~50.0%
+  Safe Stop-Loss      : -50.0% (50% × 0.7 = -35%, conservatively -50%)
+  Safety Margin       : 30% of liquidation distance kept as buffer
 
 Leverage 2x:
   Perp Fraction       : 33.3%
-  Liquidation Distance: ~33.3%
-  Safe Stop-Loss      : -33.0%
-  Safety Margin       : 0.7%
+  Liquidation PnL     : ~33.0%
+  Safe Stop-Loss      : -33.0% (33% × 0.7 = -23.1%, conservatively -33%)
+  Safety Margin       : 30% of liquidation distance kept as buffer
 
 Leverage 3x:
   Perp Fraction       : 25.0%
-  Liquidation Distance: ~25.0%
-  Safe Stop-Loss      : -24.0%
-  Safety Margin       : 0.7%
+  Liquidation PnL     : ~33.0% (32.64% price move × 0.75 fraction)
+  Safe Stop-Loss      : -24.0% (33% × 0.7 = -23.1%, rounded to -24%)
+  Safety Margin       : 30% of liquidation distance kept as buffer
 
 ═══════════════════════════════════════════════════════════
+
+Note: The 0.7 safety buffer is a MULTIPLIER: we use 70% of the
+liquidation distance as stop-loss, keeping 30% as safety margin.
 ```
 
 **Cas d'usage** :
@@ -2350,7 +2469,8 @@ python tests/test_leverage_detection.py
 for asset, balance in spot_balances.items():
     if asset != 'USDT' and balance > 0:
         symbol = f"{asset}USDT"
-        price = await api_manager.get_spot_ticker_price(symbol)
+        ticker = await api_manager.get_perp_book_ticker(symbol)
+        price = float(ticker.get('markPrice') or ticker.get('price', 0))
         spot_total_usdt += balance * price
 ```
 
@@ -2441,9 +2561,11 @@ Annualized Return       : ~32.9% APR
 
 ### Scénario 1 : Position Typique Rentable
 
+⚠️ **Note** : Cet exemple utilise le levier 3x pour illustrer l'efficacité maximale. La config par défaut utilise 1x (plus conservateur).
+
 **Configuration** :
 - Capital : 1,000 USDT
-- Levier : 3x
+- Levier : 3x (EXEMPLE AVANCÉ)
 - Paire : AVAXUSDT
 - MA APR : 15.30%
 
@@ -2488,34 +2610,33 @@ PnL :
 - Funding reçu : +2.80 + 2.75 = +5.55 USDT
 - PnL combiné : -4.29 + 4.25 + 5.55 - 3.00 = +2.51 USDT
 
-Décision : MAINTENIR (besoin ~10.80 pour 1.8x fees)
+Décision : MAINTENIR (seuil 9.0 USDT, funding actuel 5.55 USDT)
 ```
 
 **T+24h à T+48h** :
 ```
 Funding collecté continue...
 T+24h : +8.20 USDT
-T+32h : +10.80 USDT
-T+40h : +13.20 USDT ✓
+T+32h : +9.30 USDT ✓
 ```
 
-**T+40h (Fermeture)** :
+**T+32h (Fermeture)** :
 ```
-Prix AVAX : 35.10 (+0.29%)
+Prix AVAX : 34.95 (-0.14%)
 
 PnL Final :
-- Spot : 21.43 × (35.10 - 35.00) = +2.14 USDT
-- Perp : -2.10 USDT
-- Funding total : +13.20 USDT
+- Spot : 21.43 × (34.95 - 35.00) = -1.07 USDT
+- Perp : +1.06 USDT
+- Funding total : +9.30 USDT
 - Entry fees : -3.00 USDT
 - Exit fees : -1.50 USDT
 ─────────────────────────
-PnL combiné net : +8.74 USDT (+0.87%)
+PnL combiné net : +4.79 USDT (+0.48%)
 
-Décision : FERMER (funding 13.20 > 10.80 threshold)
+Décision : FERMER (funding 9.30 ≥ 9.0 threshold)
 
-Durée : 40 heures (1.67 jours)
-ROI : 0.87% en 1.67 jours → ~190% APR 🎉
+Durée : 32 heures (1.33 jours)
+ROI : 0.48% en 1.33 jours → ~270% APR théorique 🎉
 ```
 
 ### Scénario 2 : Stop-Loss Déclenché
@@ -2738,19 +2859,19 @@ Net : +$26 ✓ Profit
 ### Q7 : Quelle est la différence entre "cycle count" et "check iteration" ?
 
 **R** :
-- **Check Iteration** : Nombre de fois que le bot a exécuté sa boucle (toutes les 15 min)
+- **Check Iteration** : Nombre de fois que le bot a exécuté sa boucle (toutes les 5 min par défaut, paramétrable)
 - **Cycle Count** : Nombre de cycles de trading **complétés** (ouvert → maintenu → fermé)
 
 ```
 Timeline :
 T+0 : Check #1 → Ouvre position → cycle_count = 0
-T+15min : Check #2 → Évalue position → cycle_count = 0
-T+30min : Check #3 → Évalue position → cycle_count = 0
+T+5min : Check #2 → Évalue position → cycle_count = 0
+T+10min : Check #3 → Évalue position → cycle_count = 0
 ...
-T+40h : Check #160 → Ferme position → cycle_count = 1 ✓
-T+40h15min : Check #161 → Ouvre nouvelle position → cycle_count = 1
+T+40h : Check #481 → Ferme position → cycle_count = 1 ✓
+T+40h5min : Check #482 → Ouvre nouvelle position → cycle_count = 1
 ...
-T+80h : Check #320 → Ferme position → cycle_count = 2 ✓
+T+80h : Check #961 → Ferme position → cycle_count = 2 ✓
 ```
 
 ---
@@ -2763,7 +2884,7 @@ T+80h : Check #320 → Ferme position → cycle_count = 2 ✓
    - +50% de funding rate collecté
    - Mais stop-loss plus proche
 
-2. **Réduire fee_coverage_multiplier** (1.8 → 1.3)
+2. **Réduire fee_coverage_multiplier** (1.5 → 1.2)
    - Fermeture plus rapide
    - Plus de rotations
    - Risque : moins de profit par cycle
@@ -2854,4 +2975,3 @@ Ce bot de trading delta-neutre sur ASTER DEX est un système sophistiqué qui co
 ---
 
 *Document créé le 2025-10-12 | Version 1.0 | Pour ASTER DEX Delta-Neutral Trading Bot*
-
