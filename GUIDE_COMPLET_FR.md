@@ -3035,13 +3035,9 @@ Ce bot de trading delta-neutre sur ASTER DEX est un système sophistiqué qui co
 - Tester avec **petit capital** d'abord
 - Utiliser les scripts utilitaires pour comprendre le marché
 
-**Ressources** :
-- CLAUDE.md : Documentation technique détaillée
-- README.md : Guide utilisateur
-- Scripts utilitaires : Analyse et debugging
-
 **Avertissement** : Le trading crypto comporte des risques. Ce bot ne garantit pas de profits. Utilisez uniquement du capital que vous pouvez vous permettre de perdre.
 
 ---
 
 *Document créé le 2025-10-12 | Version 1.0 | Pour ASTER DEX Delta-Neutral Trading Bot*
+
