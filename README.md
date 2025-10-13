@@ -8,7 +8,7 @@ An automated, delta-neutral trading bot for the Aster DEX that operates on both 
 
 > ⚠️ I put the `fee_coverage_multiplier` in `config_volume_farming_strategy.json` to `0.2` that is a bit agressive to make more turnover and volume for the airdrop.
 
-The bot continuously scans for profitable funding rate opportunities, opens positions, monitors them until fees are covered, and rotates to maximize returns.
+The bot continuously scans for profitable funding rate opportunities, opens positions, monitors them until fees are covered to a certain fraction, and rotates to maximize returns.
 
 ## ⚙️ How It Works
 
