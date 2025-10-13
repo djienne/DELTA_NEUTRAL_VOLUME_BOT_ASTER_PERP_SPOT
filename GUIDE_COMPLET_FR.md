@@ -1999,11 +1999,17 @@ cp .env.example .env
 
 ##### Obtenir vos Identifiants API
 
-Vous devez créer **deux types de clés API** sur Aster DEX :
+Vous devez créer **deux types de clés API** sur Aster DEX.
+
+**Localiser la section API Management :**
+
+Sur le site Aster DEX, cliquez sur **"More"** dans le menu en haut, puis sélectionnez **"API Management"** :
+
+<img src="where_is_API_mangement.png" width="600">
 
 **1. Identifiants API v1 (API Spot) :**
 
-Naviguez vers la section API et sélectionnez "API" (pas Pro API) :
+Une fois dans API Management, sélectionnez "API" (pas Pro API) :
 
 <img src="infos_API_p1.png" width="600">
 
