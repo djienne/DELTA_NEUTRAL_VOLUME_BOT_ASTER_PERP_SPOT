@@ -1972,6 +1972,79 @@ Perp Discount Count          : 7 (15.6%)
 
 ## Configuration et Déploiement
 
+### Prérequis
+
+Avant d'installer le bot, assurez-vous d'avoir :
+
+- **[Docker](https://www.docker.com/get-started)** & **[Docker Compose](https://docs.docker.com/compose/install/)** (recommandé)
+- **Python 3.8+** (si vous n'utilisez pas Docker, 3.10+ recommandé)
+- **Identifiants API Aster DEX** (v1 et v3 - voir ci-dessous)
+
+### Installation
+
+#### 1. Cloner le Dépôt
+
+```bash
+git clone <repository_url>
+cd DELTA_NEUTRAL_VOLUME_BOT_ASTER
+```
+
+#### 2. Configurer les Clés API
+
+Créez un fichier `.env` à partir de l'exemple et ajoutez vos identifiants API.
+
+```bash
+cp .env.example .env
+```
+
+##### Obtenir vos Identifiants API
+
+Vous devez créer **deux types de clés API** sur Aster DEX :
+
+**1. Identifiants API v1 (API Spot) :**
+
+Naviguez vers la section API et sélectionnez "API" (pas Pro API) :
+
+<img src="infos_API_p1.png" width="600">
+
+Cela vous donnera :
+- `APIV1_PUBLIC_KEY` - Votre clé API
+- `APIV1_PRIVATE_KEY` - Votre clé secrète API
+
+**2. Identifiants API v3 (API Perpétuel) :**
+
+Naviguez vers la section API et sélectionnez "Pro API" :
+
+<img src="infos_API_p2.png" width="600">
+
+Cela vous donnera :
+- `API_USER` - Votre adresse de wallet EVM (par exemple, depuis Metamask, Rabby, etc.)
+- `API_SIGNER` - L'adresse du signataire générée
+- `API_PRIVATE_KEY` - La clé privée générée
+
+> **⚠️ Important :** Les deux clés API ne seront affichées qu'une seule fois ! Assurez-vous de les sauvegarder en toute sécurité.
+
+##### Configurer votre Fichier `.env`
+
+Éditez `.env` avec vos clés API Aster exchange :
+
+```env
+# Identifiants Aster API v3 (API Perpétuel - Pro API)
+API_USER="votre_adresse_wallet_eth"
+API_SIGNER="votre_cle_signer_api"
+API_PRIVATE_KEY="votre_cle_privee_api"
+
+# Identifiants Aster API v1 (API Spot - API)
+APIV1_PUBLIC_KEY="votre_cle_publique_v1"
+APIV1_PRIVATE_KEY="votre_cle_privee_v1"
+```
+
+> **Note :** Ne committez jamais votre fichier `.env`. Les deux ensembles d'identifiants sont requis pour que le bot fonctionne.
+
+#### 3. Configurer la Stratégie
+
+Éditez `config_volume_farming_strategy.json` pour ajuster les paramètres du bot (voir section suivante pour les détails).
+
 ### Structure du Fichier de Configuration
 
 `config_volume_farming_strategy.json` :
@@ -2082,20 +2155,11 @@ Réserve = 200 USDT
 - Les changements s'appliquent aux NOUVELLES positions uniquement
 - **La config fournie utilise 1x par défaut pour la sécurité**. Les exemples dans ce guide utilisent parfois 3x pour illustrer l'efficacité maximale du capital.
 
-### Variables d'Environnement (.env)
+### Rappel : Variables d'Environnement (.env)
 
-```env
-# API v3 (Perpetual - Pro API)
-API_USER=0xYourEthereumWalletAddress
-API_SIGNER=0xYourApiSignerAddress
-API_PRIVATE_KEY=0xYourPrivateKey
+Pour la configuration complète des variables d'environnement et l'obtention de vos clés API, référez-vous à la **section Installation** ci-dessus qui inclut des captures d'écran détaillées montrant où obtenir vos clés API v1 et v3 sur Aster DEX.
 
-# API v1 (Spot - API)
-APIV1_PUBLIC_KEY=your_public_key_here
-APIV1_PRIVATE_KEY=your_private_key_here
-```
-
-**Obtention des Clés** : Voir la section API Authentication dans CLAUDE.md
+Les deux ensembles de clés (v1 pour le spot et v3 pour les perpétuels) sont **obligatoires** pour le fonctionnement du bot.
 
 ### Déploiement Docker
 

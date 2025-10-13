@@ -2052,6 +2052,79 @@ Perp Discount Count          : 7 (15.6%)
 
 ## Setup and Deployment
 
+### Prerequisites
+
+Before installing the bot, ensure you have:
+
+- **[Docker](https://www.docker.com/get-started)** & **[Docker Compose](https://docs.docker.com/compose/install/)** (recommended)
+- **Python 3.8+** (if not using Docker, 3.10+ recommended)
+- **Aster DEX API credentials** (v1 and v3 - see below)
+
+### Installation
+
+#### 1. Clone the Repository
+
+```bash
+git clone <repository_url>
+cd DELTA_NEUTRAL_VOLUME_BOT_ASTER
+```
+
+#### 2. Set Up API Keys
+
+Create a `.env` file from the example and add your API credentials.
+
+```bash
+cp .env.example .env
+```
+
+##### Getting Your API Credentials
+
+You need to create **two types of API keys** on Aster DEX:
+
+**1. API v1 Credentials (Spot API):**
+
+Navigate to the API section and select "API" (not Pro API):
+
+<img src="infos_API_p1.png" width="600">
+
+This will give you:
+- `APIV1_PUBLIC_KEY` - Your API key
+- `APIV1_PRIVATE_KEY` - Your API secret key
+
+**2. API v3 Credentials (Perpetual API):**
+
+Navigate to the API section and select "Pro API":
+
+<img src="infos_API_p2.png" width="600">
+
+This will give you:
+- `API_USER` - Your EVM wallet address (e.g., from Metamask, Rabby, etc.)
+- `API_SIGNER` - The generated signer address
+- `API_PRIVATE_KEY` - The generated private key
+
+> **⚠️ Important:** Both API keys will only be shown once! Make sure to save them securely.
+
+##### Configure Your `.env` File
+
+Edit `.env` with your Aster exchange API keys:
+
+```env
+# Aster API v3 Credentials (Perpetual API - Pro API)
+API_USER="your_eth_wallet_address"
+API_SIGNER="your_api_signer_key"
+API_PRIVATE_KEY="your_api_private_key"
+
+# Aster API v1 Credentials (Spot API - API)
+APIV1_PUBLIC_KEY="your_v1_public_key"
+APIV1_PRIVATE_KEY="your_v1_private_key"
+```
+
+> **Note:** Never commit your `.env` file. Both sets of credentials are required for the bot to function.
+
+#### 3. Configure the Strategy
+
+Edit `config_volume_farming_strategy.json` to tune the bot's parameters (see next section for details).
+
 ### Configuration File Structure
 
 `config_volume_farming_strategy.json`:
@@ -2173,20 +2246,11 @@ Reserve = 200 USDT
 * Changes apply to **NEW** positions only
 * **Provided config uses 1x by default for safety**. Examples may use 3x to illustrate max capital efficiency.
 
-### Environment Variables (.env)
+### Reminder: Environment Variables (.env)
 
-```env
-# API v3 (Perpetual - Pro API)
-API_USER=0xYourEthereumWalletAddress
-API_SIGNER=0xYourApiSignerAddress
-API_PRIVATE_KEY=0xYourPrivateKey
+For complete environment variable configuration and obtaining your API keys, refer to the **Installation section** above which includes detailed screenshots showing where to get your v1 and v3 API keys on Aster DEX.
 
-# API v1 (Spot - API)
-APIV1_PUBLIC_KEY=your_public_key_here
-APIV1_PRIVATE_KEY=your_private_key_here
-```
-
-**Obtaining Keys**: See the API Authentication section in CLAUDE.md
+Both sets of keys (v1 for spot and v3 for perpetuals) are **required** for the bot to function.
 
 ### Docker Deployment
 
