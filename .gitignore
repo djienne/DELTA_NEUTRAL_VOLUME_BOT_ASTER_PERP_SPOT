@@ -1,0 +1,7 @@
+.env
+*.local
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+/volume_farming_state.json

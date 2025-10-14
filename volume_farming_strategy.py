@@ -713,7 +713,7 @@ class VolumeFarmingStrategy:
             check_iteration = 0  # Track loop iterations separately from trading cycles
             while self.running:
                 check_iteration += 1
-                logger.info(f"\n{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+                logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
                 logger.info(f"{Fore.CYAN}CHECK #{Fore.MAGENTA}{check_iteration}{Fore.CYAN} - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | Trading Cycles Completed: {Fore.MAGENTA}{self.cycle_count}{Style.RESET_ALL}")
 
                 # Get and display portfolio PnL
@@ -1101,7 +1101,7 @@ class VolumeFarmingStrategy:
             # Display table with format adapted to mode
             if self.use_funding_ma:
                 # MA MODE: Show both MA APR and Current APR for comparison
-                logger.info(f"\n{Fore.CYAN}Funding Rate Scan Results (MA Mode - {self.funding_ma_periods} periods):{Style.RESET_ALL}")
+                logger.info(f"{Fore.CYAN}Funding Rate Scan Results (MA Mode - {self.funding_ma_periods} periods):{Style.RESET_ALL}")
                 logger.info("=" * 120)
 
                 header = f"{'Symbol':<12} {'Interval':<10} {'MA Rate %':<12} {'MA APR %':<12} {'Curr APR %':<12} {'Status':<15}"
@@ -1145,7 +1145,7 @@ class VolumeFarmingStrategy:
 
             else:
                 # INSTANTANEOUS MODE: Show current/next rates with interval
-                logger.info(f"\n{Fore.CYAN}Funding Rate Scan Results (Current/Next Rates):{Style.RESET_ALL}")
+                logger.info(f"{Fore.CYAN}Funding Rate Scan Results (Current/Next Rates):{Style.RESET_ALL}")
                 logger.info("=" * 110)
 
                 header = f"{'Symbol':<12} {'Interval':<10} {'Rate %':<12} {'APR %':<12} {'Status':<15}"
@@ -1189,12 +1189,12 @@ class VolumeFarmingStrategy:
             ]
 
             if not candidates:
-                logger.warning(f"\n{Fore.RED}No pairs meet minimum APR threshold of {self.min_funding_apr}%{Style.RESET_ALL}")
+                logger.warning(f"{Fore.RED}No pairs meet minimum APR threshold of {self.min_funding_apr}%{Style.RESET_ALL}")
                 return None
 
             # Announce selection
             best = candidates[0]
-            logger.info(f"\n{Fore.GREEN}>>> Selected: {best['symbol']} with {best['effective_apr']:.2f}% effective APR{Style.RESET_ALL}")
+            logger.info(f"{Fore.GREEN}>>> Selected: {best['symbol']} with {best['effective_apr']:.2f}% effective APR{Style.RESET_ALL}")
 
             return best
 
