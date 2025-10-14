@@ -10,6 +10,7 @@ import math
 from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Tuple
+from collections import Counter
 from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -50,6 +51,7 @@ class AsterApiManager:
         self.session = None
         self.spot_exchange_info = None
         self.perp_exchange_info = None
+        self._funding_interval_cache = {}  # Cache for funding intervals per symbol
 
     # --- Ethereum Signature Authentication (v3 API) ---
 
@@ -242,6 +244,78 @@ class AsterApiManager:
             response.raise_for_status()
             return await response.json()
 
+    # --- Funding Interval Detection ---
+
+    async def detect_funding_interval(self, symbol: str) -> int:
+        """
+        Detect the funding interval for a symbol using the fundingInfo endpoint.
+        Results are cached to avoid repeated API calls.
+
+        Args:
+            symbol: Trading symbol to analyze
+
+        Returns:
+            Number of times funding is paid per day (3, 6, 24, etc.)
+        """
+        # Return cached value if available
+        if symbol in self._funding_interval_cache:
+            return self._funding_interval_cache[symbol]
+
+        try:
+            # Try to get funding info from the API (most reliable method)
+            funding_info = await self.get_funding_info(symbol)
+            if funding_info and 'fundingIntervalHours' in funding_info:
+                interval_hours = int(funding_info['fundingIntervalHours'])
+                if interval_hours > 0:
+                    funding_freq = int(24 / interval_hours)
+                    self._funding_interval_cache[symbol] = funding_freq
+                    return funding_freq
+
+            # Fallback: Analyze historical funding times
+            history = await self.get_funding_rate_history(symbol, limit=10)
+
+            if not history or len(history) < 2:
+                self._funding_interval_cache[symbol] = 3  # Default to 3x per day
+                return 3
+
+            # Calculate time differences between consecutive funding times
+            time_diffs = []
+            for i in range(len(history) - 1):
+                t1 = int(history[i]['fundingTime'])
+                t2 = int(history[i + 1]['fundingTime'])
+                diff_hours = abs(t1 - t2) / (1000 * 3600)  # Convert ms to hours
+                time_diffs.append(diff_hours)
+
+            # Determine most common interval (round to nearest hour)
+            rounded_diffs = [round(d) for d in time_diffs]
+            most_common = Counter(rounded_diffs).most_common(1)
+
+            if most_common:
+                interval_hours = most_common[0][0]
+                if interval_hours > 0:
+                    funding_freq = int(24 / interval_hours)
+                    self._funding_interval_cache[symbol] = funding_freq
+                    return funding_freq
+
+            self._funding_interval_cache[symbol] = 3  # Default to 3x per day
+            return 3
+        except Exception:
+            self._funding_interval_cache[symbol] = 3  # Default to 3x per day on error
+            return 3
+
+    def calculate_funding_apr(self, funding_rate: float, funding_freq: int) -> float:
+        """
+        Calculate annualized APR from funding rate and frequency.
+
+        Args:
+            funding_rate: Single funding rate (as decimal, e.g., 0.0001)
+            funding_freq: Number of times funding is paid per day (3, 6, 24, etc.)
+
+        Returns:
+            Annualized APR as percentage
+        """
+        return funding_rate * funding_freq * 365 * 100
+
     # --- Public Data Fetching Methods ---
 
     async def get_perp_account_info(self) -> dict:
@@ -262,6 +336,49 @@ class AsterApiManager:
         async with self.session.get(url, params=params) as response:
             response.raise_for_status()
             return await response.json()
+
+    async def get_current_funding_rate(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the current/next funding rate for a symbol (not historical).
+        This is the rate that will be used for the next funding payment.
+
+        Returns:
+            Dict with 'fundingRate', 'nextFundingTime', 'markPrice', etc.
+        """
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+        url = f"{FUTURES_BASE_URL}/fapi/v1/premiumIndex"
+        params = {'symbol': symbol}
+        try:
+            async with self.session.get(url, params=params) as response:
+                response.raise_for_status()
+                data = await response.json()
+                # Convert lastFundingRate to fundingRate for consistency
+                if 'lastFundingRate' in data:
+                    data['fundingRate'] = data['lastFundingRate']
+                return data
+        except Exception:
+            return None
+
+    async def get_funding_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get funding configuration info for a symbol.
+        Returns fundingIntervalHours, fundingFeeCap, fundingFeeFloor, etc.
+        """
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+        url = f"{FUTURES_BASE_URL}/fapi/v1/fundingInfo"
+        params = {'symbol': symbol}
+        try:
+            async with self.session.get(url, params=params) as response:
+                response.raise_for_status()
+                data = await response.json()
+                # Returns a list, get the first item
+                if isinstance(data, list) and len(data) > 0:
+                    return data[0]
+                return None
+        except Exception:
+            return None
 
     async def get_perp_book_ticker(self, symbol: str) -> dict:
         """Get perpetuals book ticker for a symbol."""
@@ -644,22 +761,31 @@ class AsterApiManager:
             return {}
 
     async def get_all_funding_rates(self) -> List[Dict[str, Any]]:
-        """Fetches and returns funding rates for all available delta-neutral pairs."""
+        """Fetches and returns CURRENT/NEXT funding rates for all available delta-neutral pairs with correct funding intervals."""
         symbols_to_scan = await self.discover_delta_neutral_pairs()
         if not symbols_to_scan:
             return []
 
-        rate_tasks = [self.get_funding_rate_history(s, limit=1) for s in symbols_to_scan]
-        rate_results = await asyncio.gather(*rate_tasks, return_exceptions=True)
+        # Use current funding rate (not historical) - this is the rate that will be paid at next funding
+        rate_tasks = [self.get_current_funding_rate(s) for s in symbols_to_scan]
+        interval_tasks = [self.detect_funding_interval(s) for s in symbols_to_scan]
+
+        rate_results, interval_results = await asyncio.gather(
+            asyncio.gather(*rate_tasks, return_exceptions=True),
+            asyncio.gather(*interval_tasks, return_exceptions=True)
+        )
 
         funding_data = []
         for i, symbol in enumerate(symbols_to_scan):
             rate_data = rate_results[i]
+            funding_freq = interval_results[i] if not isinstance(interval_results[i], Exception) else 3
+
             if not isinstance(rate_data, Exception) and rate_data:
-                rate = float(rate_data[0].get('fundingRate', 0))
-                apr = rate * 3 * 365 * 100
-                funding_data.append({'symbol': symbol, 'rate': rate, 'apr': apr})
-        
+                # Get current/next funding rate (from premiumIndex endpoint)
+                rate = float(rate_data.get('fundingRate', 0))
+                apr = self.calculate_funding_apr(rate, funding_freq)
+                funding_data.append({'symbol': symbol, 'rate': rate, 'apr': apr, 'funding_freq': funding_freq})
+
         # Sort by highest APR
         return sorted(funding_data, key=lambda x: x['apr'], reverse=True)
 
@@ -714,15 +840,25 @@ class AsterApiManager:
             perp_symbol_map=perp_symbol_map
         ).values())
 
-        # 5. Enrich analyzed positions with APR and other data
+        # 5. Enrich analyzed positions with CURRENT funding APR (with correct funding intervals)
         dn_positions = [p for p in analyzed_positions if p.get('is_delta_neutral')]
         if dn_positions:
-            rate_tasks = [self.get_funding_rate_history(p['symbol'], limit=1) for p in dn_positions]
-            rate_results = await asyncio.gather(*rate_tasks, return_exceptions=True)
+            # Use current funding rate (not historical) - this is the rate that will be paid at next funding
+            rate_tasks = [self.get_current_funding_rate(p['symbol']) for p in dn_positions]
+            interval_tasks = [self.detect_funding_interval(p['symbol']) for p in dn_positions]
+
+            rate_results, interval_results = await asyncio.gather(
+                asyncio.gather(*rate_tasks, return_exceptions=True),
+                asyncio.gather(*interval_tasks, return_exceptions=True)
+            )
+
             for i, pos in enumerate(dn_positions):
                 rate_data = rate_results[i]
+                funding_freq = interval_results[i] if not isinstance(interval_results[i], Exception) else 3
+
                 if not isinstance(rate_data, Exception) and rate_data:
-                    pos['current_apr'] = float(rate_data[0].get('fundingRate', 0)) * 3 * 365 * 100
+                    # Get current/next funding rate (from premiumIndex endpoint)
+                    pos['current_apr'] = self.calculate_funding_apr(float(rate_data.get('fundingRate', 0)), funding_freq)
 
         # 6. Return all processed data in a structured dictionary
         return {
@@ -1040,31 +1176,53 @@ class AsterApiManager:
 
     async def get_funding_rate_ma(self, symbol: str, periods: int = 10) -> Optional[Dict[str, Any]]:
         """
-        Get moving average of funding rates for a symbol.
+        Get moving average of funding rates for a symbol with correct funding frequency.
+
+        MA calculation uses:
+        - 1 current/next rate (from premiumIndex - the rate that will be paid next)
+        - N-1 most recent historical rates (from fundingRate - rates already paid)
+
+        This provides a more up-to-date MA that includes the current market rate.
 
         Args:
             symbol: Trading symbol (e.g., 'BTCUSDT')
-            periods: Number of historical periods to include in moving average
+            periods: Number of periods to include in moving average (default: 10)
 
         Returns:
             Dict with current rate, MA rate, and metadata, or None if insufficient data
         """
         try:
-            # Fetch historical funding rates
-            history = await self.get_funding_rate_history(symbol=symbol, limit=periods)
+            # Detect funding frequency for this symbol
+            funding_freq = await self.detect_funding_interval(symbol)
 
-            if not history or len(history) < periods:
+            # Fetch BOTH current/next rate AND historical rates concurrently
+            current_rate_task = self.get_current_funding_rate(symbol)
+            history_task = self.get_funding_rate_history(symbol=symbol, limit=periods - 1)
+
+            current_rate_data, history = await asyncio.gather(current_rate_task, history_task)
+
+            # Validate we have enough data
+            if not current_rate_data or not history or len(history) < (periods - 1):
                 return None
 
-            # Extract funding rates (most recent first)
-            rates = [float(entry['fundingRate']) for entry in history[:periods]]
+            # Extract current/next rate (will be paid at next funding)
+            current_rate = float(current_rate_data.get('fundingRate', 0))
 
-            # Use strategy logic for calculation
-            result = DeltaNeutralLogic.calculate_funding_rate_ma(rates, periods)
+            # Extract historical rates (oldest first, as returned by API)
+            # Take only N-1 historical rates
+            historical_rates = [float(entry['fundingRate']) for entry in history[:(periods - 1)]]
+
+            # Combine: historical rates (oldest to newest) + current rate (newest)
+            # This gives us a list of N rates ordered from oldest to newest
+            rates = historical_rates + [current_rate]
+
+            # Use strategy logic for calculation with correct frequency
+            result = DeltaNeutralLogic.calculate_funding_rate_ma(rates, periods, funding_freq)
 
             if result:
-                # Add symbol and calculate next funding time
+                # Add symbol and current rate for reference
                 result['symbol'] = symbol
+                result['current_rate'] = current_rate  # Store current rate separately
 
                 # Calculate next funding time (funding happens every 8 hours at 00:00, 08:00, 16:00 UTC)
                 from datetime import datetime, timedelta

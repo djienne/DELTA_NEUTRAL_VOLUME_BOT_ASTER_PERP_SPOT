@@ -889,58 +889,72 @@ class VolumeFarmingStrategy:
             Dict with symbol and funding rate info, or None if no opportunity
         """
         try:
-            if self.use_funding_ma:
-                logger.info(f"Scanning for best funding rate opportunity (MA {self.funding_ma_periods} periods)...")
-            else:
-                logger.info("Scanning for best funding rate opportunity (instantaneous)...")
-
-            # ALWAYS fetch current funding rates first to filter negative rates
-            current_funding_rates_data = await self.api_manager.get_all_funding_rates()
-            if not current_funding_rates_data:
-                logger.warning("No current funding rates available")
-                return None
-
-            # Build map of symbol -> current rate for filtering
-            current_rates_map = {
-                rate_data['symbol']: rate_data['rate']
-                for rate_data in current_funding_rates_data
-            }
-
             # Track filtered pairs for logging
             negative_rate_pairs = []
 
-            # Get funding rates based on mode
+            # Choose mode based on configuration
             if self.use_funding_ma:
-                # Use moving average funding rates
-                funding_rates_ma = await self.api_manager.get_all_funding_rates_ma(self.funding_ma_periods)
-                if not funding_rates_ma:
-                    logger.warning("No MA funding rates available")
+                # MA MODE: Use moving average of funding rates for stability
+                logger.info(f"Scanning for best funding rate opportunity (MA mode: {self.funding_ma_periods} periods)...")
+
+                # Get all available symbols first
+                available_symbols = await self.api_manager.discover_delta_neutral_pairs()
+                if not available_symbols:
+                    logger.warning("No delta-neutral pairs available")
                     return None
 
-                # Convert MA format to standard format, filtering negative current rates
-                funding_rates = []
-                for ma_data in funding_rates_ma:
-                    symbol = ma_data['symbol']
-                    current_rate = current_rates_map.get(symbol, 0)
+                # Fetch MA funding rates for all symbols
+                ma_tasks = [self.api_manager.get_funding_rate_ma(symbol, self.funding_ma_periods) for symbol in available_symbols]
+                ma_results = await asyncio.gather(*ma_tasks, return_exceptions=True)
 
-                    # Skip if current rate is negative (even if MA is positive)
+                # Also fetch current rates for comparison and negative rate filtering
+                current_rates_data = await self.api_manager.get_all_funding_rates()
+                current_rates_map = {r['symbol']: r for r in current_rates_data} if current_rates_data else {}
+
+                funding_rates = []
+                for i, symbol in enumerate(available_symbols):
+                    ma_data = ma_results[i]
+
+                    if isinstance(ma_data, Exception) or not ma_data:
+                        logger.debug(f"Could not fetch MA for {symbol}: {ma_data if isinstance(ma_data, Exception) else 'No data'}")
+                        continue
+
+                    # Get current rate for this symbol (for filtering and display)
+                    current_rate_info = current_rates_map.get(symbol)
+                    current_rate = current_rate_info['rate'] if current_rate_info else 0
+
+                    # CRITICAL: Filter based on CURRENT rate, not MA
+                    # Even if MA is positive, if current rate is negative, exclude the pair
                     if current_rate < 0:
                         negative_rate_pairs.append(f"{symbol} ({current_rate*100:.4f}%)")
-                        logger.debug(f"Filtered {symbol}: current funding rate {current_rate*100:.4f}% is negative (MA: {ma_data['ma_rate']*100:.4f}%)")
+                        logger.debug(f"Filtered {symbol}: current funding rate {current_rate*100:.4f}% is negative (MA was {ma_data.get('ma_rate', 0)*100:.4f}%)")
                         continue
 
                     funding_rates.append({
                         'symbol': symbol,
-                        'funding_rate': ma_data['ma_rate'],  # Use MA rate for selection
-                        'current_rate': current_rate,  # Store current rate for reference
+                        'funding_rate': ma_data['ma_rate'],  # Use MA rate for decision
+                        'current_rate': current_rate,  # Store current rate for display
                         'effective_apr': ma_data['effective_ma_apr'],
-                        'next_funding_time': ma_data['next_funding_time'],
-                        'ma_periods': ma_data['ma_periods'],
-                        'ma_stdev': ma_data['stdev'],
+                        'funding_freq': current_rate_info.get('funding_freq', 3) if current_rate_info else 3,
+                        'next_funding_time': None,
                         'using_ma': True
                     })
+
+                # Log negative rate filtering summary
+                if negative_rate_pairs:
+                    logger.info(f"{Fore.RED}Negative rate filter: {Fore.MAGENTA}{len(negative_rate_pairs)}{Fore.RED} pair(s) excluded: {Fore.YELLOW}{', '.join(negative_rate_pairs)}{Style.RESET_ALL}")
+
             else:
-                # Use instantaneous funding rates, filtering negative rates
+                # INSTANTANEOUS MODE: Use current/next funding rates from premiumIndex
+                logger.info("Scanning for best funding rate opportunity (current/next rates from premiumIndex)...")
+
+                # Fetch current/next funding rates from premiumIndex endpoint
+                current_funding_rates_data = await self.api_manager.get_all_funding_rates()
+                if not current_funding_rates_data:
+                    logger.warning("No current funding rates available")
+                    return None
+
+                # Use instantaneous (current/next) funding rates, filtering negative rates
                 funding_rates = []
                 for rate_data in current_funding_rates_data:
                     symbol = rate_data['symbol']
@@ -956,14 +970,15 @@ class VolumeFarmingStrategy:
                         'symbol': symbol,
                         'funding_rate': current_rate,
                         'current_rate': current_rate,
-                        'effective_apr': rate_data['apr'] / 2,  # Effective APR for 1x leverage
+                        'effective_apr': rate_data['apr'],  # Already calculated correctly with frequency
+                        'funding_freq': rate_data.get('funding_freq', 3),
                         'next_funding_time': None,
                         'using_ma': False
                     })
 
-            # Log negative rate filtering summary
-            if negative_rate_pairs:
-                logger.info(f"{Fore.RED}Negative rate filter: {Fore.MAGENTA}{len(negative_rate_pairs)}{Fore.RED} pair(s) excluded: {Fore.YELLOW}{', '.join(negative_rate_pairs)}{Style.RESET_ALL}")
+                # Log negative rate filtering summary
+                if negative_rate_pairs:
+                    logger.info(f"{Fore.RED}Negative rate filter: {Fore.MAGENTA}{len(negative_rate_pairs)}{Fore.RED} pair(s) excluded: {Fore.YELLOW}{', '.join(negative_rate_pairs)}{Style.RESET_ALL}")
 
             # Get available delta-neutral pairs
             available_pairs = await self.api_manager.discover_delta_neutral_pairs()
@@ -1083,13 +1098,13 @@ class VolumeFarmingStrategy:
             # Sort all by effective APR (descending) for display
             all_candidates.sort(key=lambda x: x['effective_apr'], reverse=True)
 
-            # Display table of ALL available rates
-            logger.info(f"\n{Fore.CYAN}Funding Rate Scan Results:{Style.RESET_ALL}")
-            logger.info("=" * 120)
+            # Display table with format adapted to mode
+            if self.use_funding_ma:
+                # MA MODE: Show both MA APR and Current APR for comparison
+                logger.info(f"\n{Fore.CYAN}Funding Rate Scan Results (MA Mode - {self.funding_ma_periods} periods):{Style.RESET_ALL}")
+                logger.info("=" * 120)
 
-            if all_candidates[0].get('using_ma'):
-                # MA mode - show MA rate, current rate, and stdev
-                header = f"{'Symbol':<12} {'MA Rate %':<12} {'MA APR %':<12} {'Curr APR %':<13} {'StDev %':<12} {'Next Funding':<20} {'Status':<15}"
+                header = f"{'Symbol':<12} {'Interval':<10} {'MA Rate %':<12} {'MA APR %':<12} {'Curr APR %':<12} {'Status':<15}"
                 logger.info(header)
                 logger.info("-" * 120)
 
@@ -1109,34 +1124,33 @@ class VolumeFarmingStrategy:
                         status = f"<{self.min_funding_apr}%"
 
                     symbol_display = f"{c['symbol']:<12}"
+
+                    # Display interval (e.g., "4h/6x")
+                    funding_freq = c.get('funding_freq', 3)
+                    interval_hours = 24 / funding_freq if funding_freq > 0 else 8
+                    interval_str = f"{int(interval_hours)}h/{funding_freq}x"
+                    interval_display = f"{interval_str:<10}"
+
                     ma_rate = f"{c['funding_rate']*100:>11.4f}"
                     ma_apr = f"{c['effective_apr']:>11.2f}"
 
-                    # Calculate current APR from current rate
+                    # Calculate current APR for comparison
                     current_rate = c.get('current_rate', 0)
-                    current_apr = current_rate * 3 * 365 * 100  # 3x daily, 365 days, as percentage
-                    curr_apr_str = f"{current_apr:>12.2f}"
+                    current_apr = current_rate * funding_freq * 365 * 100
+                    curr_apr = f"{current_apr:>11.2f}"
 
-                    stdev = f"{c.get('ma_stdev', 0)*100:>11.4f}"
+                    logger.info(f"{color}{symbol_display} {interval_display} {ma_rate} {ma_apr} {curr_apr} {status:<15}{Style.RESET_ALL}")
 
-                    # Format next funding time
-                    next_funding_raw = c.get('next_funding_time', 'N/A')
-                    if next_funding_raw and next_funding_raw != 'N/A':
-                        try:
-                            # Convert millisecond timestamp to UTC datetime
-                            next_funding_dt = datetime.utcfromtimestamp(int(next_funding_raw) / 1000)
-                            next_funding = next_funding_dt.strftime('%Y-%m-%d %H:%M UTC')
-                        except (ValueError, TypeError):
-                            next_funding = 'N/A'
-                    else:
-                        next_funding = 'N/A'
+                logger.info("=" * 120)
 
-                    logger.info(f"{color}{symbol_display} {ma_rate} {ma_apr} {curr_apr_str} {stdev} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
             else:
-                # Instantaneous mode - simpler table
-                header = f"{'Symbol':<12} {'Rate %':<12} {'Eff APR %':<12} {'Next Funding':<20} {'Status':<15}"
+                # INSTANTANEOUS MODE: Show current/next rates with interval
+                logger.info(f"\n{Fore.CYAN}Funding Rate Scan Results (Current/Next Rates):{Style.RESET_ALL}")
+                logger.info("=" * 110)
+
+                header = f"{'Symbol':<12} {'Interval':<10} {'Rate %':<12} {'APR %':<12} {'Status':<15}"
                 logger.info(header)
-                logger.info("-" * 100)
+                logger.info("-" * 110)
 
                 for c in all_candidates:
                     # Mark current position
@@ -1154,24 +1168,19 @@ class VolumeFarmingStrategy:
                         status = f"<{self.min_funding_apr}%"
 
                     symbol_display = f"{c['symbol']:<12}"
+
+                    # Display interval (e.g., "4h/6x")
+                    funding_freq = c.get('funding_freq', 3)
+                    interval_hours = 24 / funding_freq if funding_freq > 0 else 8
+                    interval_str = f"{int(interval_hours)}h/{funding_freq}x"
+                    interval_display = f"{interval_str:<10}"
+
                     rate = f"{c['funding_rate']*100:>11.4f}"
                     eff_apr = f"{c['effective_apr']:>11.2f}"
 
-                    # Format next funding time
-                    next_funding_raw = c.get('next_funding_time', 'N/A')
-                    if next_funding_raw and next_funding_raw != 'N/A':
-                        try:
-                            # Convert millisecond timestamp to UTC datetime
-                            next_funding_dt = datetime.utcfromtimestamp(int(next_funding_raw) / 1000)
-                            next_funding = next_funding_dt.strftime('%Y-%m-%d %H:%M UTC')
-                        except (ValueError, TypeError):
-                            next_funding = 'N/A'
-                    else:
-                        next_funding = 'N/A'
+                    logger.info(f"{color}{symbol_display} {interval_display} {rate} {eff_apr} {status:<15}{Style.RESET_ALL}")
 
-                    logger.info(f"{color}{symbol_display} {rate} {eff_apr} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
-
-            logger.info("=" * 120)
+                logger.info("=" * 110)
 
             # Filter by minimum APR threshold (effective APR for 1x leverage)
             candidates = [

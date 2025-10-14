@@ -525,14 +525,16 @@ class DeltaNeutralLogic:
     @staticmethod
     def calculate_funding_rate_ma(
         funding_rates: List[float],
-        periods: int = 10
+        periods: int = 10,
+        funding_freq: int = 3
     ) -> Optional[Dict[str, Any]]:
         """
         Calculate moving average and statistics for funding rates.
 
         Args:
-            funding_rates: List of funding rates (most recent first)
+            funding_rates: List of funding rates (oldest first, as returned by API)
             periods: Number of periods to include in moving average
+            funding_freq: Number of times funding is paid per day (3, 6, 24, etc.)
 
         Returns:
             Dict with MA rate, APR, statistics, or None if insufficient data
@@ -540,8 +542,9 @@ class DeltaNeutralLogic:
         if not funding_rates or len(funding_rates) < periods:
             return None
 
-        # Take only the requested number of periods
-        rates = funding_rates[:periods]
+        # Take the last N periods (most recent) and reverse to newest-first for processing
+        # API returns oldest-first, so [-periods:] gets the most recent periods
+        rates = list(reversed(funding_rates[-periods:]))
 
         # Calculate moving average
         ma_rate = statistics.mean(rates)
@@ -552,15 +555,18 @@ class DeltaNeutralLogic:
         # Current (latest) rate
         current_rate = rates[0]
 
-        # Calculate APR based on MA rate (3 payments per day, 365 days)
-        # For delta-neutral 1x leverage, divide by 2
-        ma_apr = ma_rate * 3 * 365 * 100
-        effective_ma_apr = ma_apr / 2  # For 1x leverage
+        # Calculate APR based on MA rate with correct funding frequency
+        ma_apr = ma_rate * funding_freq * 365 * 100
+
+        # Note: No longer dividing by 2 for leverage - that's handled elsewhere
+        # The raw APR is what matters for comparison and decision-making
+        effective_ma_apr = ma_apr
 
         return {
             'current_rate': current_rate,
             'ma_rate': ma_rate,
             'ma_periods': periods,
+            'funding_freq': funding_freq,
             'rates_used': rates,
             'stdev': stdev,
             'ma_apr': ma_apr,

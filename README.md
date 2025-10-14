@@ -6,9 +6,7 @@ An automated, delta-neutral trading bot for the Aster DEX that operates on both 
 
 > This bot is ideal for the Stage 3 of Aster airdrop, as it will farm both perpetual and spot volume for you.
 
-> ⚠️ I put the `fee_coverage_multiplier` in `config_volume_farming_strategy.json` to `0.2` that is a bit agressive to make more turnover and volume for the airdrop.
-
-The bot continuously scans for profitable funding rate opportunities, opens positions, monitors them until fees are covered to a certain fraction, and rotates to generate volume and maximize returns.
+The bot continuously scans for profitable funding rate opportunities, opens positions, monitors them until fees are covered, and rotates to maximize returns.
 
 ## ⚙️ How It Works
 
@@ -34,7 +32,7 @@ The bot operates in a continuous loop:
 -   **Delta-Neutral**: Minimizes directional risk with balanced spot and perpetual positions.
 -   **Funding Rate Arbitrage**: Profits from collecting funding payments on perpetuals (every 8 hours at 00:00, 08:00, 16:00 UTC).
 -   **Configurable Leverage**: Support for 1x-3x leverage with automatic capital allocation and safe transitions.
--   **MA Filtering**: Uses a funding rate moving average to avoid volatile, short-lived opportunities while displaying both MA and current APR for comparison.
+-   **Hybrid MA Filtering**: Uses a moving average of funding rates (combining 1 current/next rate + N-1 historical rates) to balance responsiveness with stability, while displaying both MA and current APR for comparison.
 -   **Dynamic Pair Discovery**: Automatically finds all tradable delta-neutral pairs.
 -   **Volume Filtering**: Only trades pairs with ≥ $250M 24h volume to ensure sufficient liquidity and minimize slippage.
 -   **Negative Rate Filtering**: Automatically excludes pairs with negative current funding rates, even if their MA is positive.
@@ -147,17 +145,11 @@ cp .env.example .env
 
 #### Getting Your API Credentials
 
-You need to create **two types of API keys** on Aster DEX.
-
-**Locate the API Management Section:**
-
-On the Aster DEX website, click on **"More"** in the top menu, then select **"API Management"**:
-
-<img src="where_is_API_mangement.png" width="600">
+You need to create **two types of API keys** on Aster DEX:
 
 **1. API v1 Credentials (Spot API):**
 
-Once in API Management, select "API" (not Pro API):
+Navigate to the API section and select "API" (not Pro API):
 
 <img src="infos_API_p1.png" width="600">
 
@@ -203,7 +195,7 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 | ------------------------- | --------------------------------------------------------------------------- | ------- |
 | `capital_fraction`        | Percentage of available USDT to use per position.                           | `0.98`  |
 | `min_funding_apr`         | Minimum annualized APR to consider for an opportunity.                      | `5.4`   |
-| `use_funding_ma`          | Use a moving average of funding rates for stability.                        | `true`  |
+| `use_funding_ma`          | Use hybrid MA (current + historical rates) for balanced responsiveness.     | `true`  |
 | `funding_ma_periods`      | Number of periods for the funding rate moving average.                      | `10`    |
 | `fee_coverage_multiplier` | Close when funding covers fees by this factor (e.g., 1.8 = 180%).           | `1.1`   |
 | `max_position_age_hours`  | Maximum hours to hold a position before rotating.                           | `336`   |
