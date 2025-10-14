@@ -208,20 +208,20 @@ python tests/test_leverage_detection.py
 All configuration in `config_volume_farming_strategy.json`:
 
 **Capital Management:**
-- `capital_fraction`: Fraction of total USDT to deploy (default: 0.50)
+- `capital_fraction`: Fraction of total USDT to deploy (default: 0.96)
 
 **Funding Rate Strategy:**
-- `min_funding_apr`: Minimum APR threshold (default: 7.0%)
-- `use_funding_ma`: Use hybrid MA (1 current + N-1 historical rates) for balanced responsiveness (default: true)
+- `min_funding_apr`: Minimum APR threshold (default: 5.4%)
+- `use_funding_ma`: Use hybrid MA (1 current + N-1 historical rates) for balanced responsiveness (default: false)
 - `funding_ma_periods`: MA periods (default: 10)
 
 **Position Management:**
-- `fee_coverage_multiplier`: Close when funding ≥ fees × multiplier (default: 1.8)
+- `fee_coverage_multiplier`: Close when funding ≥ fees × multiplier (default: 0.2 for fast rotation and airdrop farming)
 - `max_position_age_hours`: Max hold time (default: 336 hours)
-- `loop_interval_seconds`: Cycle interval (default: 900 seconds)
+- `loop_interval_seconds`: Cycle interval (default: 300 seconds = 5 minutes)
 
 **Leverage Settings:**
-- `leverage`: Perpetual leverage 1-3 (default: 3)
+- `leverage`: Perpetual leverage 1-3 (default: 1)
 - **Note**: `emergency_stop_loss_pct` is **automatically calculated** based on leverage (NOT in config)
 - **Note**: Section renamed from `risk_management` to `leverage_settings` (backward compatible)
 
