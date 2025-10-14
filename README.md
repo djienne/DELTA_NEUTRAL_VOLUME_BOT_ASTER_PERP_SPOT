@@ -132,11 +132,6 @@ This is useful for:
 
 ### 1. Clone the Repository
 
-```bash
-git clone <repository_url>
-cd DELTA_NEUTRAL_VOLUME_BOT_ASTER
-```
-
 ### 2. Set Up API Keys
 
 Create a `.env` file from the example and add your API credentials.
