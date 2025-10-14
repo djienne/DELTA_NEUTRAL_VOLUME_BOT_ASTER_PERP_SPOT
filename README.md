@@ -147,6 +147,10 @@ cp .env.example .env
 
 #### Getting Your API Credentials
 
+First, navigate to **API Management** on Aster DEX by clicking **More** → **API Management**:
+
+<img src="where_is_API_mangement.png" width="600">
+
 You need to create **two types of API keys** on Aster DEX:
 
 **1. API v1 Credentials (Spot API):**
