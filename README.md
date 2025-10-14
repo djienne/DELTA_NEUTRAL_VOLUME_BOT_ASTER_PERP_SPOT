@@ -6,6 +6,8 @@ An automated, delta-neutral trading bot for the Aster DEX that operates on both 
 
 > This bot is ideal for the Stage 3 of Aster airdrop, as it will farm both perpetual and spot volume for you.
 
+> ⚠️ I put the `fee_coverage_multiplier` in `config_volume_farming_strategy.json` to `0.2` that is a bit agressive to make more turnover and volume for the airdrop.
+
 The bot continuously scans for profitable funding rate opportunities, opens positions, monitors them until fees are covered, and rotates to maximize returns.
 
 ## ⚙️ How It Works
