@@ -206,7 +206,7 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 **Note:** Stop-loss is **automatically calculated** based on leverage (not a manual parameter).
 
 ### 4. Put USDT on the account (perp or spot, it will automatically rebalance)
-**If BTC if selected as best opportunity, you may need at least 0.001 BTC times 2 in USDT (Aster's limitation)**
+* **If BTC if selected as best opportunity, you may need at least 0.001 BTC times 2 in USDT (Aster's limitation)**
 * Avoid having asBNB or USDF for perp account collateral, it may cause problems.
 
 ## 🚀 Usage
