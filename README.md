@@ -199,14 +199,14 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 
 | Parameter                 | Description                                                                 | Default |
 | ------------------------- | --------------------------------------------------------------------------- | ------- |
-| `capital_fraction`        | Percentage of available USDT to use per position.                           | `0.98`  |
+| `capital_fraction`        | Percentage of available USDT to use per position.                           | `0.96`  |
 | `min_funding_apr`         | Minimum annualized APR to consider for an opportunity.                      | `5.4`   |
-| `use_funding_ma`          | Use hybrid MA (current + historical rates) for balanced responsiveness.     | `true`  |
+| `use_funding_ma`          | Use hybrid MA (current + historical rates) for balanced responsiveness.     | `false` |
 | `funding_ma_periods`      | Number of periods for the funding rate moving average.                      | `10`    |
-| `fee_coverage_multiplier` | Close when funding covers fees by this factor (e.g., 1.8 = 180%).           | `1.1`   |
+| `fee_coverage_multiplier` | Close when funding covers fees by this factor (e.g., 0.2 = 20% for fast rotation). | `0.2`   |
 | `max_position_age_hours`  | Maximum hours to hold a position before rotating.                           | `336`   |
-| `loop_interval_seconds`   | Seconds to wait between each strategy cycle.                                | `900`   |
-| `leverage`                | Leverage for perpetual positions (1-3). Higher = more capital efficient.    | `3`     |
+| `loop_interval_seconds`   | Seconds to wait between each strategy cycle (300 = 5 minutes).              | `300`   |
+| `leverage`                | Leverage for perpetual positions (1-3). Higher = more capital efficient.    | `1`     |
 
 **Note:** Stop-loss is **automatically calculated** based on leverage (not a manual parameter).
 
