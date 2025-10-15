@@ -133,11 +133,6 @@ This is useful for:
 
 ### 1. Clone the Repository
 
-```bash
-git clone <repository_url>
-cd DELTA_NEUTRAL_VOLUME_BOT_ASTER
-```
-
 ### 2. Set Up API Keys
 
 Create a `.env` file from the example and add your API credentials.
@@ -213,6 +208,10 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 | `forced_rotation_apr_multiplier` | New APR must be at least this multiplier × current APR to force rotation. | `2.0` |
 
 **Note:** Stop-loss is **automatically calculated** based on leverage (not a manual parameter).
+
+### 4. Fund account with USDT (perp or spot, it will automatically rebalance)
+* **If BTC is selected as best opportunity, you may need at least 0.001 BTC times 2 in USDT (Aster's limitation)**, so about >235 USDT (as of October 14th, 2025)
+* **Avoid having asBNB or USDF for perp account collateral, it may cause problems. Only have USDT.**
 
 ## 🚀 Usage
 
