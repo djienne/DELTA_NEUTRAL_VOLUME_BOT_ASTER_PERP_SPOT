@@ -17,9 +17,10 @@ The bot operates in a continuous loop:
 1.  **Health Check**: Verifies account health, balances, and existing positions before any action.
 2.  **Position Monitoring**: If a position is open, it's monitored for exit conditions:
     *   Funding payments cover entry/exit fees (configurable multiplier).
-    *   Forced rotation: A significantly better opportunity exists (configurable multiplier, default 2x APR after 4 hours).
+    *   Forced rotation: A **different symbol** with significantly better opportunity exists (configurable multiplier, default 2x APR after 4 hours).
     *   Maximum position age is reached.
     *   Emergency stop-loss is triggered.
+    *   **Note**: Rotations only trigger when a different symbol offers better opportunity. If the current symbol's APR improves, the bot continues holding to avoid wasting fees.
 3.  **Opportunity Scanning**: If no position is open, it scans all delta-neutral pairs for the most profitable and stable funding rate APR, filtering out:
     *   Pairs with negative current funding rates (even if MA is positive).
     *   Pairs with < $250M 24h trading volume.
@@ -35,7 +36,7 @@ The bot operates in a continuous loop:
 -   **Funding Rate Arbitrage**: Profits from collecting funding payments on perpetuals (every 8 hours at 00:00, 08:00, 16:00 UTC).
 -   **Configurable Leverage**: Support for 1x-3x leverage with automatic capital allocation and safe transitions.
 -   **Hybrid MA Filtering**: Uses a moving average of funding rates (combining 1 current/next rate + N-1 historical rates) to balance responsiveness with stability, while displaying both MA and current APR for comparison.
--   **Forced Rotation**: Automatically rotates to significantly better opportunities when position age threshold is met (configurable, enabled by default).
+-   **Forced Rotation**: Automatically rotates to **different symbols** with significantly better opportunities when position age threshold is met (configurable, enabled by default). Never rotates to the same symbol to avoid wasting fees.
 -   **Dynamic Pair Discovery**: Automatically finds all tradable delta-neutral pairs.
 -   **Volume Filtering**: Only trades pairs with ≥ $250M 24h volume to ensure sufficient liquidity and minimize slippage.
 -   **Negative Rate Filtering**: Automatically excludes pairs with negative current funding rates, even if their MA is positive.

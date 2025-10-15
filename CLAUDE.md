@@ -291,21 +291,27 @@ All configuration in `config_volume_farming_strategy.json`:
 
 **IMPORTANT**: Forced rotation is separate from the existing absolute APR improvement rotation (+10% APR points).
 
+**CRITICAL**: ALWAYS check that the best opportunity is a **different symbol** before rotating. Never close and reopen the same symbol, even if APR improved dramatically - this wastes fees.
+
 1. **Two rotation mechanisms exist**:
-   - Absolute improvement: Rotates if new APR > current APR + 10% points (e.g., 10% → 20.1%)
-   - Forced rotation: Rotates if new APR ≥ current APR × multiplier (e.g., 8% → 16% with 2x multiplier)
+   - Absolute improvement: Rotates if new APR > current APR + 10% points AND **different symbol** (e.g., BTCUSDT 10% → ETHUSDT 20.1%)
+   - Forced rotation: Rotates if new APR ≥ current APR × multiplier AND **different symbol** (e.g., BTCUSDT 8% → ETHUSDT 16% with 2x multiplier)
 2. **Both checks run independently** - Either can trigger rotation
-3. **Configuration in `position_management` section**:
+3. **Symbol equality check is mandatory** - Before any rotation check:
+   - Compare `best_symbol == current_symbol`
+   - If same: Log "continuing to hold" and show APR improvement for visibility
+   - If different: Proceed with rotation checks
+4. **Configuration in `position_management` section**:
    - `enable_forced_rotation`: Boolean to enable/disable (default: true)
    - `forced_rotation_min_hours`: Minimum position age before considering (default: 4.0)
    - `forced_rotation_apr_multiplier`: Required APR multiplier (default: 2.0)
-4. **Implementation location**: `volume_farming_strategy.py:1542-1555` in `_should_close_position()`
-5. **Logging format**: Use yellow color with detailed comparison showing multiplier achieved
-6. **Use cases**:
-   - Low APR positions (5% → 10%+ triggers with 2x)
-   - Medium APR positions (10% → 20%+ triggers with 2x)
-   - Prevents staying in weak positions when much better opportunities exist
-7. **Testing**: Test with different multipliers (1.5x, 2x, 3x) to find optimal balance
+5. **Implementation location**: `volume_farming_strategy.py:1540-1567` in `_should_close_position()`
+6. **Logging format**: Use yellow color with detailed comparison showing multiplier achieved
+7. **Use cases**:
+   - Low APR positions (5% BTCUSDT → 10%+ ETHUSDT triggers with 2x)
+   - Medium APR positions (10% BTCUSDT → 20%+ ETHUSDT triggers with 2x)
+   - Prevents staying in weak positions when much better opportunities exist on different pairs
+8. **Testing**: Test with different multipliers (1.5x, 2x, 3x) to find optimal balance
 
 ### When Modifying Funding Rate Display
 
@@ -494,19 +500,25 @@ The bot tracks three types of position PnL:
 ### Forced Rotation Behavior
 The bot implements two independent rotation mechanisms:
 
+**CRITICAL**: Rotations only trigger when a **different symbol** offers better opportunity. If the best opportunity is the current symbol (even with improved APR), the bot continues holding to avoid wasting fees on unnecessary close/reopen.
+
 1. **Absolute APR Improvement Rotation** (hardcoded):
    - Triggers if: new APR > current APR + 10% points
    - AND position age ≥ 4 hours
-   - Example: 10% → 20.1% triggers rotation
+   - AND best opportunity is a **different symbol**
+   - Example: 10% BTCUSDT → 20.1% ETHUSDT triggers rotation
+   - Example: 10% BTCUSDT → 20.1% BTCUSDT does NOT trigger (same symbol)
 
 2. **Forced Rotation** (configurable):
    - Triggers if: new APR ≥ current APR × multiplier
    - AND position age ≥ `forced_rotation_min_hours`
    - AND `enable_forced_rotation = true`
-   - Example with 2x multiplier: 8% → 16%+ triggers rotation
+   - AND best opportunity is a **different symbol**
+   - Example with 2x multiplier: 8% BTCUSDT → 16%+ ETHUSDT triggers rotation
+   - Example with 2x multiplier: 8% BTCUSDT → 16%+ BTCUSDT does NOT trigger (same symbol)
    - Logging: Yellow banner with detailed comparison
 
-Either mechanism can trigger rotation independently. Both exist to optimize capital allocation.
+Either mechanism can trigger rotation independently. Both exist to optimize capital allocation across different pairs.
 
 ### Health Check Validation
 - Leverage must be in valid range 1x-3x (not hardcoded to 1x)
@@ -563,8 +575,20 @@ python calculate_safe_stoploss.py
 - API parameter errors in utilities → Ensure using `apiv1_public`/`apiv1_private` (not `_key` suffix)
 - Forced rotation not triggering → Check `forced_rotation_min_hours` (position age) and `forced_rotation_apr_multiplier` (APR requirement); verify `enable_forced_rotation = true` in config
 - Rotations too frequent → Increase `forced_rotation_min_hours` or `forced_rotation_apr_multiplier`; or disable with `enable_forced_rotation = false`
+- Bot closed and reopened same symbol → This was a bug fixed in latest version; ensure you have the symbol equality check in rotation logic
 
 ## Recent Improvements (2025-10)
+
+### Same-Symbol Rotation Prevention (NEW - 2025-10-15)
+- **Bug fix**: Bot no longer rotates when the best opportunity is the same symbol as current position
+- **Previous behavior**: Would close and reopen same symbol if APR improved significantly (e.g., ASTERUSDT 12% → 89%), wasting fees
+- **New behavior**: Checks `best_symbol == current_symbol` before any rotation
+  - If same: Logs "continuing to hold" and shows APR improvement
+  - If different: Proceeds with normal rotation checks
+- **Benefit**: Prevents wasteful rotations that burn entry/exit fees (~0.20% total) without gaining anything
+- **Example**: ASTERUSDT 12% → ASTERUSDT 89% now continues holding instead of rotating
+- **Implementation**: `volume_farming_strategy.py:1540-1567` in `_should_close_position()`
+- **Applies to both rotation mechanisms**: Absolute improvement (+10% APR) and forced rotation (multiplier-based)
 
 ### Forced Rotation Feature (NEW)
 - **New feature**: Configurable forced rotation when significantly better APR opportunities exist

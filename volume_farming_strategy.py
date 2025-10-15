@@ -1535,26 +1535,36 @@ class VolumeFarmingStrategy:
                 current_apr = self.current_position.get('effective_apr', 0)
                 new_apr = current_best.get('effective_apr', 0)
                 apr_improvement = new_apr - current_apr
+                best_symbol = current_best['symbol']
 
-                # Only rotate if improvement is > 10% APR points AND we've held for at least 4 hours
-                if apr_improvement > 10.0 and hours_elapsed >= 4.0:
-                    logger.info(f"{Fore.YELLOW}Better opportunity found: {Fore.MAGENTA}{current_best['symbol']}{Style.RESET_ALL} ({Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} vs {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}) - improvement: {Fore.GREEN}+{apr_improvement:.2f}%{Style.RESET_ALL}")
-                    return True
-
-                # Check 3b: Forced rotation (multiplicative improvement)
-                if self.enable_forced_rotation and hours_elapsed >= self.forced_rotation_min_hours:
-                    required_apr = current_apr * self.forced_rotation_apr_multiplier
-                    if new_apr >= required_apr:
-                        apr_multiplier = new_apr / current_apr if current_apr > 0 else 0
-                        logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
-                        logger.info(f"{Fore.YELLOW}FORCED ROTATION TRIGGERED!{Style.RESET_ALL}")
-                        logger.info(f"  New opportunity: {Fore.MAGENTA}{current_best['symbol']}{Style.RESET_ALL}")
-                        logger.info(f"  Current APR: {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}")
-                        logger.info(f"  New APR: {Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} ({Fore.MAGENTA}{apr_multiplier:.2f}x{Style.RESET_ALL})")
-                        logger.info(f"  Required multiplier: {Fore.CYAN}{self.forced_rotation_apr_multiplier}x{Style.RESET_ALL}")
-                        logger.info(f"  Position age: {Fore.CYAN}{hours_elapsed:.2f}{Style.RESET_ALL} hours (min: {Fore.CYAN}{self.forced_rotation_min_hours}{Style.RESET_ALL} hours)")
-                        logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                # CRITICAL: Don't rotate if the best opportunity is the same symbol we're already holding
+                # Even if APR improved, closing and reopening the same position wastes fees
+                if best_symbol == symbol:
+                    logger.info(f"{Fore.CYAN}Best opportunity is current position ({Fore.MAGENTA}{symbol}{Fore.CYAN}), continuing to hold...{Style.RESET_ALL}")
+                    # Still log if APR improved significantly for visibility
+                    if apr_improvement > 10.0:
+                        logger.info(f"  {Fore.GREEN}APR improved by +{apr_improvement:.2f}% ({current_apr:.2f}% → {new_apr:.2f}%){Style.RESET_ALL}")
+                else:
+                    # Only rotate if improvement is > 10% APR points AND we've held for at least 4 hours AND it's a different symbol
+                    if apr_improvement > 10.0 and hours_elapsed >= 4.0:
+                        logger.info(f"{Fore.YELLOW}Better opportunity found: {Fore.MAGENTA}{best_symbol}{Style.RESET_ALL} ({Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} vs {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}) - improvement: {Fore.GREEN}+{apr_improvement:.2f}%{Style.RESET_ALL}")
                         return True
+
+                    # Check 3b: Forced rotation (multiplicative improvement) - only for different symbols
+                    if self.enable_forced_rotation and hours_elapsed >= self.forced_rotation_min_hours:
+                        required_apr = current_apr * self.forced_rotation_apr_multiplier
+                        if new_apr >= required_apr:
+                            apr_multiplier = new_apr / current_apr if current_apr > 0 else 0
+                            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                            logger.info(f"{Fore.YELLOW}FORCED ROTATION TRIGGERED!{Style.RESET_ALL}")
+                            logger.info(f"  Current position: {Fore.MAGENTA}{symbol}{Style.RESET_ALL}")
+                            logger.info(f"  New opportunity: {Fore.MAGENTA}{best_symbol}{Style.RESET_ALL}")
+                            logger.info(f"  Current APR: {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}")
+                            logger.info(f"  New APR: {Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} ({Fore.MAGENTA}{apr_multiplier:.2f}x{Style.RESET_ALL})")
+                            logger.info(f"  Required multiplier: {Fore.CYAN}{self.forced_rotation_apr_multiplier}x{Style.RESET_ALL}")
+                            logger.info(f"  Position age: {Fore.CYAN}{hours_elapsed:.2f}{Style.RESET_ALL} hours (min: {Fore.CYAN}{self.forced_rotation_min_hours}{Style.RESET_ALL} hours)")
+                            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                            return True
 
             # Check 4: Position age exceeded
             if time_elapsed > self.max_position_age:
