@@ -210,7 +210,7 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 | `loop_interval_seconds`   | Seconds to wait between each strategy cycle (300 = 5 minutes).              | `300`   |
 | `leverage`                | Leverage for perpetual positions (1-3). Higher = more capital efficient.    | `1`     |
 | `enable_forced_rotation`  | Enable forced rotation when a significantly better opportunity exists.      | `true`  |
-| `forced_rotation_min_hours` | Minimum hours before considering forced rotation to better opportunity.   | `4.0`   |
+| `forced_rotation_min_hours` | Minimum hours before considering forced rotation to better opportunity.   | `8.0`   |
 | `forced_rotation_apr_multiplier` | New APR must be at least this multiplier × current APR to force rotation. | `2.0` |
 
 **Note:** Stop-loss is **automatically calculated** based on leverage (not a manual parameter).
