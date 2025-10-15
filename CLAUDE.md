@@ -274,17 +274,18 @@ All configuration in `config_volume_farming_strategy.json`:
 
 **CRITICAL**: Stop-loss is auto-calculated - do NOT add manual parameter to config.
 
-1. **Calculation is automatic** - See `_calculate_safe_stoploss()` in `volume_farming_strategy.py:162-205`
+1. **Calculation is automatic** - See `_calculate_safe_stoploss()` in `volume_farming_strategy.py:178-223`
 2. **Formula accounts for**:
    - Exchange maintenance margin (0.5%)
-   - Safety buffer (0.7% subtracted from max price move): fees + slippage + volatility
-   - Delta-neutral capital allocation: `perp_fraction = L/(L+1)`
-3. **Stop-loss values**:
-   - 1x leverage: -50%
-   - 2x leverage: -33%
-   - 3x leverage: -24%
+   - Safety multiplier (0.7 = 70% of liquidation threshold)
+   - Based on perp PnL directly (not adjusted for delta-neutral capital allocation)
+3. **Stop-loss values** (measured on perp PnL):
+   - 1x leverage: -70% (liquidation ~-100%)
+   - 2x leverage: -35% (liquidation ~-50%)
+   - 3x leverage: -23% (liquidation ~-33%)
 4. **Testing**: Use `calculate_safe_stoploss.py` to validate calculations
 5. **Modification**: Only change `maintenance_margin` or `safety_buffer` parameters in the function
+6. **Formula**: `stop_loss = -[(1+1/L)/(1+m)-1] × safety_buffer` where L=leverage, m=maintenance margin, safety_buffer=0.7
 
 ### When Modifying Forced Rotation Logic
 
@@ -514,9 +515,9 @@ Either mechanism can trigger rotation independently. Both exist to optimize capi
 
 ### Emergency Conditions
 - **Stop Loss**: Closes position if **Perp PnL** ≤ auto-calculated stop-loss (not combined PnL)
-  - Stop-loss automatically calculated: 1x=-50%, 2x=-33%, 3x=-24%
+  - Stop-loss automatically calculated: 1x=-70%, 2x=-35%, 3x=-23%
   - Uses perp PnL (more volatile) not combined DN PnL
-  - Includes 0.7% safety buffer from liquidation
+  - Set at 70% of distance to liquidation (0.7 safety multiplier)
 - **Manual Emergency Exit**: Use `emergency_exit.py` for immediate manual position closure
   - Displays current PnL before execution
   - Requires explicit confirmation
@@ -673,12 +674,13 @@ python calculate_safe_stoploss.py
 
 ### Automatic Stop-Loss Calculation
 - **Removed manual parameter**: `emergency_stop_loss_pct` no longer in config
-- **Auto-calculated based on leverage**: Uses liquidation math with 0.7% safety buffer (subtracted from max price movement)
-- **Mathematically optimal**: Maximum safe stop-loss for each leverage level
-- **Formula**: `[(1+1/L)/(1+m)-1-b] × L/(L+1)` where L=leverage, m=maintenance margin, b=buffer
-- **Results**: 1x=-50%, 2x=-33%, 3x=-24%
-- **Safety buffer components**: Trading fees (0.1%) + slippage (0.2%) + volatility (0.4%) = 0.7% total, subtracted from liquidation threshold
-- **Location**: `volume_farming_strategy.py:162-205`
+- **Auto-calculated based on leverage**: Uses liquidation math with 0.7 safety multiplier (70% of liquidation threshold)
+- **Mathematically optimal**: Conservative stop-loss maintaining safe distance from liquidation
+- **Formula**: `stop_loss = -[(1+1/L)/(1+m)-1] × 0.7` where L=leverage, m=maintenance margin
+- **Based on perp PnL**: Measured directly on perpetual position PnL (not adjusted for delta-neutral capital allocation)
+- **Results**: 1x=-70%, 2x=-35%, 3x=-23%
+- **Safety approach**: Triggers at 70% of the way to liquidation, providing 30% buffer for fees, slippage, and volatility
+- **Location**: `volume_farming_strategy.py:178-223`
 - **Testing tool**: `calculate_safe_stoploss.py`
 
 ### Position PnL Calculation Enhancements

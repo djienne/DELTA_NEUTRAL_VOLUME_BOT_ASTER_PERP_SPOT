@@ -138,7 +138,7 @@ class VolumeFarmingStrategy:
         logger.info(f"{Fore.CYAN}Volume Farming Strategy initialized{Style.RESET_ALL}")
         logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
         logger.info(f"Capital Fraction: {Fore.MAGENTA}{capital_fraction*100:.0f}%{Style.RESET_ALL} of available USDT")
-        logger.info(f"Emergency Stop-Loss: {Fore.RED}{self.emergency_stop_loss_pct:.1f}%{Style.RESET_ALL} (auto-calculated for {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} leverage with 0.7% safety buffer)")
+        logger.info(f"Emergency Stop-Loss: {Fore.RED}{self.emergency_stop_loss_pct:.1f}%{Style.RESET_ALL} (auto-calculated for {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} leverage at 70% of liquidation threshold)")
 
         # Check if we have a position with different leverage before logging config leverage
         has_leverage_mismatch = (self.current_position and
@@ -176,44 +176,46 @@ class VolumeFarmingStrategy:
                     logger.debug(f"[LEVERAGE] Leverage mismatch: position={self.position_leverage}x, config={self.leverage}x - preserving position leverage")
 
     @staticmethod
-    def _calculate_safe_stoploss(leverage: int, maintenance_margin: float = 0.005, safety_buffer: float = 0.007) -> float:
+    def _calculate_safe_stoploss(leverage: int, maintenance_margin: float = 0.005, safety_buffer: float = 0.7) -> float:
         """
         Calculate maximum safe stop-loss for SHORT perpetual position in delta-neutral strategy.
 
         This calculation ensures the stop-loss triggers BEFORE reaching liquidation,
-        with a safety buffer to account for fees, slippage, and volatility.
+        using a safety multiplier to maintain distance from liquidation.
+        Stop-loss is measured based on PERP PnL (not total delta-neutral PnL).
 
         Args:
             leverage: Leverage multiplier (1-3)
             maintenance_margin: Exchange maintenance margin rate (default: 0.5%)
-            safety_buffer: Safety buffer in price fraction (default: 0.7%)
-                          Includes: fees (~0.1%), slippage (~0.2%), volatility (~0.4%)
+            safety_buffer: Safety multiplier (default: 0.7 = 70% of liquidation threshold)
+                          Sets stop-loss at 70% of the distance to liquidation
 
         Returns:
-            Maximum safe stop-loss as negative percentage (e.g., -24.0 for -24%)
+            Maximum safe stop-loss as negative percentage (e.g., -23.0 for -23%)
 
         Formula:
-            1. Calculate max price move before liquidation: s_max = [(1 + 1/L)/(1 + m) - 1] - b
-            2. Adjust for delta-neutral capital allocation: PnL% = -s_max * [L/(L+1)]
-            3. Round down for extra safety
+            1. Calculate max price move before liquidation: s_max = [(1 + 1/L)/(1 + m) - 1]
+            2. Perp PnL at liquidation: -s_max
+            3. Apply safety multiplier: stop-loss = -s_max * safety_buffer
+            4. Round down for extra safety
 
-        Example for 3x leverage:
-            - Liquidation at +32.67% price move
-            - Max safe stop at +31.97% (with 0.7% buffer)
-            - Perp allocation: 75% of total capital
-            - Max safe stop-loss: -31.97% × 0.75 = -23.98% ≈ -24%
+        Examples:
+            - 1x leverage: Liquidation ~-100%, Stop-loss: -70%
+            - 2x leverage: Liquidation ~-50%, Stop-loss: -35%
+            - 3x leverage: Liquidation ~-33%, Stop-loss: -23%
         """
         L = leverage
         m = maintenance_margin
-        b = safety_buffer
+        multiplier = safety_buffer
 
-        # Calculate max price distance before hitting liquidation buffer (for SHORT)
-        s_max = ((1 + 1/L) / (1 + m) - 1) - b
+        # Calculate max price distance before hitting liquidation (for SHORT)
+        s_max = (1 + 1/L) / (1 + m) - 1
 
-        # In delta-neutral strategy, perp is only L/(L+1) of total capital
-        # So PnL relative to total deployed capital is:
-        perp_fraction = L / (L + 1)
-        max_stop_pnl = -s_max * perp_fraction
+        # Perp PnL at liquidation (measured on perp position directly)
+        liquidation_pnl = -s_max
+
+        # Apply safety multiplier (e.g., 0.7 = stop at 70% of way to liquidation)
+        max_stop_pnl = liquidation_pnl * multiplier
 
         # Convert to percentage and round down for safety
         max_stop_pct = math.floor(max_stop_pnl * 100)
