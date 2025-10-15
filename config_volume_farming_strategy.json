@@ -8,9 +8,11 @@
   },
 
   "funding_rate_strategy": {
+    "min_volume_threshold": 250000000,
     "min_funding_apr": 5.4,
     "use_funding_ma": false,
     "funding_ma_periods": 10,
+    "_comment_min_volume_threshold": "Minimum 24h volume threshold for a pair to be considered (in USDT)",
     "_comment_apr": "Minimum effective APR (%) to consider opening a position",
     "_comment_ma": "Use moving average for stable signals, periods = number of historical rates"
   },
