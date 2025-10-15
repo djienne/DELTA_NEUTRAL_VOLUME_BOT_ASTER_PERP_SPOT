@@ -64,7 +64,10 @@ class VolumeFarmingStrategy:
         max_position_age_hours: int = 24,
         use_funding_ma: bool = True,
         funding_ma_periods: int = 10,
-        leverage: int = 1
+        leverage: int = 1,
+        enable_forced_rotation: bool = True,
+        forced_rotation_min_hours: float = 4.0,
+        forced_rotation_apr_multiplier: float = 2.0
     ):
         """
         Initialize the volume farming strategy.
@@ -78,6 +81,9 @@ class VolumeFarmingStrategy:
             use_funding_ma: Use moving average of funding rates instead of instantaneous
             funding_ma_periods: Number of periods for funding rate moving average
             leverage: Leverage multiplier (1-3). 1=50/50, 2=33% perp/67% spot, 3=25% perp/75% spot
+            enable_forced_rotation: Enable forced rotation when better opportunity exists
+            forced_rotation_min_hours: Minimum hours before considering forced rotation
+            forced_rotation_apr_multiplier: New APR must be at least this multiplier × current APR
         """
         # Validate leverage
         if leverage < 1 or leverage > 3:
@@ -100,6 +106,9 @@ class VolumeFarmingStrategy:
         self.use_funding_ma = use_funding_ma
         self.funding_ma_periods = funding_ma_periods
         self.leverage = leverage
+        self.enable_forced_rotation = enable_forced_rotation
+        self.forced_rotation_min_hours = forced_rotation_min_hours
+        self.forced_rotation_apr_multiplier = forced_rotation_apr_multiplier
 
         # Calculate emergency stop-loss automatically based on leverage
         # This ensures we stay safely away from liquidation
@@ -129,7 +138,7 @@ class VolumeFarmingStrategy:
         logger.info(f"{Fore.CYAN}Volume Farming Strategy initialized{Style.RESET_ALL}")
         logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
         logger.info(f"Capital Fraction: {Fore.MAGENTA}{capital_fraction*100:.0f}%{Style.RESET_ALL} of available USDT")
-        logger.info(f"Emergency Stop-Loss: {Fore.RED}{self.emergency_stop_loss_pct:.1f}%{Style.RESET_ALL} (auto-calculated for {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} leverage with 0.7% safety buffer)")
+        logger.info(f"Emergency Stop-Loss: {Fore.RED}{self.emergency_stop_loss_pct:.1f}%{Style.RESET_ALL} (auto-calculated for {Fore.MAGENTA}{leverage}x{Style.RESET_ALL} leverage at 70% of liquidation threshold)")
 
         # Check if we have a position with different leverage before logging config leverage
         has_leverage_mismatch = (self.current_position and
@@ -167,44 +176,46 @@ class VolumeFarmingStrategy:
                     logger.debug(f"[LEVERAGE] Leverage mismatch: position={self.position_leverage}x, config={self.leverage}x - preserving position leverage")
 
     @staticmethod
-    def _calculate_safe_stoploss(leverage: int, maintenance_margin: float = 0.005, safety_buffer: float = 0.007) -> float:
+    def _calculate_safe_stoploss(leverage: int, maintenance_margin: float = 0.005, safety_buffer: float = 0.7) -> float:
         """
         Calculate maximum safe stop-loss for SHORT perpetual position in delta-neutral strategy.
 
         This calculation ensures the stop-loss triggers BEFORE reaching liquidation,
-        with a safety buffer to account for fees, slippage, and volatility.
+        using a safety multiplier to maintain distance from liquidation.
+        Stop-loss is measured based on PERP PnL (not total delta-neutral PnL).
 
         Args:
             leverage: Leverage multiplier (1-3)
             maintenance_margin: Exchange maintenance margin rate (default: 0.5%)
-            safety_buffer: Safety buffer in price fraction (default: 0.7%)
-                          Includes: fees (~0.1%), slippage (~0.2%), volatility (~0.4%)
+            safety_buffer: Safety multiplier (default: 0.7 = 70% of liquidation threshold)
+                          Sets stop-loss at 70% of the distance to liquidation
 
         Returns:
-            Maximum safe stop-loss as negative percentage (e.g., -24.0 for -24%)
+            Maximum safe stop-loss as negative percentage (e.g., -23.0 for -23%)
 
         Formula:
-            1. Calculate max price move before liquidation: s_max = [(1 + 1/L)/(1 + m) - 1] - b
-            2. Adjust for delta-neutral capital allocation: PnL% = -s_max * [L/(L+1)]
-            3. Round down for extra safety
+            1. Calculate max price move before liquidation: s_max = [(1 + 1/L)/(1 + m) - 1]
+            2. Perp PnL at liquidation: -s_max
+            3. Apply safety multiplier: stop-loss = -s_max * safety_buffer
+            4. Round down for extra safety
 
-        Example for 3x leverage:
-            - Liquidation at +32.67% price move
-            - Max safe stop at +31.97% (with 0.7% buffer)
-            - Perp allocation: 75% of total capital
-            - Max safe stop-loss: -31.97% × 0.75 = -23.98% ≈ -24%
+        Examples:
+            - 1x leverage: Liquidation ~-100%, Stop-loss: -70%
+            - 2x leverage: Liquidation ~-50%, Stop-loss: -35%
+            - 3x leverage: Liquidation ~-33%, Stop-loss: -23%
         """
         L = leverage
         m = maintenance_margin
-        b = safety_buffer
+        multiplier = safety_buffer
 
-        # Calculate max price distance before hitting liquidation buffer (for SHORT)
-        s_max = ((1 + 1/L) / (1 + m) - 1) - b
+        # Calculate max price distance before hitting liquidation (for SHORT)
+        s_max = (1 + 1/L) / (1 + m) - 1
 
-        # In delta-neutral strategy, perp is only L/(L+1) of total capital
-        # So PnL relative to total deployed capital is:
-        perp_fraction = L / (L + 1)
-        max_stop_pnl = -s_max * perp_fraction
+        # Perp PnL at liquidation (measured on perp position directly)
+        liquidation_pnl = -s_max
+
+        # Apply safety multiplier (e.g., 0.7 = stop at 70% of way to liquidation)
+        max_stop_pnl = liquidation_pnl * multiplier
 
         # Convert to percentage and round down for safety
         max_stop_pct = math.floor(max_stop_pnl * 100)
@@ -713,7 +724,7 @@ class VolumeFarmingStrategy:
             check_iteration = 0  # Track loop iterations separately from trading cycles
             while self.running:
                 check_iteration += 1
-                logger.info(f"\n{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
+                logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
                 logger.info(f"{Fore.CYAN}CHECK #{Fore.MAGENTA}{check_iteration}{Fore.CYAN} - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC | Trading Cycles Completed: {Fore.MAGENTA}{self.cycle_count}{Style.RESET_ALL}")
 
                 # Get and display portfolio PnL
@@ -889,58 +900,72 @@ class VolumeFarmingStrategy:
             Dict with symbol and funding rate info, or None if no opportunity
         """
         try:
-            if self.use_funding_ma:
-                logger.info(f"Scanning for best funding rate opportunity (MA {self.funding_ma_periods} periods)...")
-            else:
-                logger.info("Scanning for best funding rate opportunity (instantaneous)...")
-
-            # ALWAYS fetch current funding rates first to filter negative rates
-            current_funding_rates_data = await self.api_manager.get_all_funding_rates()
-            if not current_funding_rates_data:
-                logger.warning("No current funding rates available")
-                return None
-
-            # Build map of symbol -> current rate for filtering
-            current_rates_map = {
-                rate_data['symbol']: rate_data['rate']
-                for rate_data in current_funding_rates_data
-            }
-
             # Track filtered pairs for logging
             negative_rate_pairs = []
 
-            # Get funding rates based on mode
+            # Choose mode based on configuration
             if self.use_funding_ma:
-                # Use moving average funding rates
-                funding_rates_ma = await self.api_manager.get_all_funding_rates_ma(self.funding_ma_periods)
-                if not funding_rates_ma:
-                    logger.warning("No MA funding rates available")
+                # MA MODE: Use moving average of funding rates for stability
+                logger.info(f"Scanning for best funding rate opportunity (MA mode: {self.funding_ma_periods} periods)...")
+
+                # Get all available symbols first
+                available_symbols = await self.api_manager.discover_delta_neutral_pairs()
+                if not available_symbols:
+                    logger.warning("No delta-neutral pairs available")
                     return None
 
-                # Convert MA format to standard format, filtering negative current rates
-                funding_rates = []
-                for ma_data in funding_rates_ma:
-                    symbol = ma_data['symbol']
-                    current_rate = current_rates_map.get(symbol, 0)
+                # Fetch MA funding rates for all symbols
+                ma_tasks = [self.api_manager.get_funding_rate_ma(symbol, self.funding_ma_periods) for symbol in available_symbols]
+                ma_results = await asyncio.gather(*ma_tasks, return_exceptions=True)
 
-                    # Skip if current rate is negative (even if MA is positive)
+                # Also fetch current rates for comparison and negative rate filtering
+                current_rates_data = await self.api_manager.get_all_funding_rates()
+                current_rates_map = {r['symbol']: r for r in current_rates_data} if current_rates_data else {}
+
+                funding_rates = []
+                for i, symbol in enumerate(available_symbols):
+                    ma_data = ma_results[i]
+
+                    if isinstance(ma_data, Exception) or not ma_data:
+                        logger.debug(f"Could not fetch MA for {symbol}: {ma_data if isinstance(ma_data, Exception) else 'No data'}")
+                        continue
+
+                    # Get current rate for this symbol (for filtering and display)
+                    current_rate_info = current_rates_map.get(symbol)
+                    current_rate = current_rate_info['rate'] if current_rate_info else 0
+
+                    # CRITICAL: Filter based on CURRENT rate, not MA
+                    # Even if MA is positive, if current rate is negative, exclude the pair
                     if current_rate < 0:
                         negative_rate_pairs.append(f"{symbol} ({current_rate*100:.4f}%)")
-                        logger.debug(f"Filtered {symbol}: current funding rate {current_rate*100:.4f}% is negative (MA: {ma_data['ma_rate']*100:.4f}%)")
+                        logger.debug(f"Filtered {symbol}: current funding rate {current_rate*100:.4f}% is negative (MA was {ma_data.get('ma_rate', 0)*100:.4f}%)")
                         continue
 
                     funding_rates.append({
                         'symbol': symbol,
-                        'funding_rate': ma_data['ma_rate'],  # Use MA rate for selection
-                        'current_rate': current_rate,  # Store current rate for reference
+                        'funding_rate': ma_data['ma_rate'],  # Use MA rate for decision
+                        'current_rate': current_rate,  # Store current rate for display
                         'effective_apr': ma_data['effective_ma_apr'],
-                        'next_funding_time': ma_data['next_funding_time'],
-                        'ma_periods': ma_data['ma_periods'],
-                        'ma_stdev': ma_data['stdev'],
+                        'funding_freq': current_rate_info.get('funding_freq', 3) if current_rate_info else 3,
+                        'next_funding_time': None,
                         'using_ma': True
                     })
+
+                # Log negative rate filtering summary
+                if negative_rate_pairs:
+                    logger.info(f"{Fore.RED}Negative rate filter: {Fore.MAGENTA}{len(negative_rate_pairs)}{Fore.RED} pair(s) excluded: {Fore.YELLOW}{', '.join(negative_rate_pairs)}{Style.RESET_ALL}")
+
             else:
-                # Use instantaneous funding rates, filtering negative rates
+                # INSTANTANEOUS MODE: Use current/next funding rates from premiumIndex
+                logger.info("Scanning for best funding rate opportunity (current/next rates from premiumIndex)...")
+
+                # Fetch current/next funding rates from premiumIndex endpoint
+                current_funding_rates_data = await self.api_manager.get_all_funding_rates()
+                if not current_funding_rates_data:
+                    logger.warning("No current funding rates available")
+                    return None
+
+                # Use instantaneous (current/next) funding rates, filtering negative rates
                 funding_rates = []
                 for rate_data in current_funding_rates_data:
                     symbol = rate_data['symbol']
@@ -956,14 +981,15 @@ class VolumeFarmingStrategy:
                         'symbol': symbol,
                         'funding_rate': current_rate,
                         'current_rate': current_rate,
-                        'effective_apr': rate_data['apr'] / 2,  # Effective APR for 1x leverage
+                        'effective_apr': rate_data['apr'],  # Already calculated correctly with frequency
+                        'funding_freq': rate_data.get('funding_freq', 3),
                         'next_funding_time': None,
                         'using_ma': False
                     })
 
-            # Log negative rate filtering summary
-            if negative_rate_pairs:
-                logger.info(f"{Fore.RED}Negative rate filter: {Fore.MAGENTA}{len(negative_rate_pairs)}{Fore.RED} pair(s) excluded: {Fore.YELLOW}{', '.join(negative_rate_pairs)}{Style.RESET_ALL}")
+                # Log negative rate filtering summary
+                if negative_rate_pairs:
+                    logger.info(f"{Fore.RED}Negative rate filter: {Fore.MAGENTA}{len(negative_rate_pairs)}{Fore.RED} pair(s) excluded: {Fore.YELLOW}{', '.join(negative_rate_pairs)}{Style.RESET_ALL}")
 
             # Get available delta-neutral pairs
             available_pairs = await self.api_manager.discover_delta_neutral_pairs()
@@ -1083,13 +1109,13 @@ class VolumeFarmingStrategy:
             # Sort all by effective APR (descending) for display
             all_candidates.sort(key=lambda x: x['effective_apr'], reverse=True)
 
-            # Display table of ALL available rates
-            logger.info(f"\n{Fore.CYAN}Funding Rate Scan Results:{Style.RESET_ALL}")
-            logger.info("=" * 120)
+            # Display table with format adapted to mode
+            if self.use_funding_ma:
+                # MA MODE: Show both MA APR and Current APR for comparison
+                logger.info(f"{Fore.CYAN}Funding Rate Scan Results (MA Mode - {self.funding_ma_periods} periods):{Style.RESET_ALL}")
+                logger.info("=" * 120)
 
-            if all_candidates[0].get('using_ma'):
-                # MA mode - show MA rate, current rate, and stdev
-                header = f"{'Symbol':<12} {'MA Rate %':<12} {'MA APR %':<12} {'Curr APR %':<13} {'StDev %':<12} {'Next Funding':<20} {'Status':<15}"
+                header = f"{'Symbol':<12} {'Interval':<10} {'MA Rate %':<12} {'MA APR %':<12} {'Curr APR %':<12} {'Status':<15}"
                 logger.info(header)
                 logger.info("-" * 120)
 
@@ -1109,34 +1135,33 @@ class VolumeFarmingStrategy:
                         status = f"<{self.min_funding_apr}%"
 
                     symbol_display = f"{c['symbol']:<12}"
+
+                    # Display interval (e.g., "4h/6x")
+                    funding_freq = c.get('funding_freq', 3)
+                    interval_hours = 24 / funding_freq if funding_freq > 0 else 8
+                    interval_str = f"{int(interval_hours)}h/{funding_freq}x"
+                    interval_display = f"{interval_str:<10}"
+
                     ma_rate = f"{c['funding_rate']*100:>11.4f}"
                     ma_apr = f"{c['effective_apr']:>11.2f}"
 
-                    # Calculate current APR from current rate
+                    # Calculate current APR for comparison
                     current_rate = c.get('current_rate', 0)
-                    current_apr = current_rate * 3 * 365 * 100  # 3x daily, 365 days, as percentage
-                    curr_apr_str = f"{current_apr:>12.2f}"
+                    current_apr = current_rate * funding_freq * 365 * 100
+                    curr_apr = f"{current_apr:>11.2f}"
 
-                    stdev = f"{c.get('ma_stdev', 0)*100:>11.4f}"
+                    logger.info(f"{color}{symbol_display} {interval_display} {ma_rate} {ma_apr} {curr_apr} {status:<15}{Style.RESET_ALL}")
 
-                    # Format next funding time
-                    next_funding_raw = c.get('next_funding_time', 'N/A')
-                    if next_funding_raw and next_funding_raw != 'N/A':
-                        try:
-                            # Convert millisecond timestamp to UTC datetime
-                            next_funding_dt = datetime.utcfromtimestamp(int(next_funding_raw) / 1000)
-                            next_funding = next_funding_dt.strftime('%Y-%m-%d %H:%M UTC')
-                        except (ValueError, TypeError):
-                            next_funding = 'N/A'
-                    else:
-                        next_funding = 'N/A'
+                logger.info("=" * 120)
 
-                    logger.info(f"{color}{symbol_display} {ma_rate} {ma_apr} {curr_apr_str} {stdev} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
             else:
-                # Instantaneous mode - simpler table
-                header = f"{'Symbol':<12} {'Rate %':<12} {'Eff APR %':<12} {'Next Funding':<20} {'Status':<15}"
+                # INSTANTANEOUS MODE: Show current/next rates with interval
+                logger.info(f"{Fore.CYAN}Funding Rate Scan Results (Current/Next Rates):{Style.RESET_ALL}")
+                logger.info("=" * 110)
+
+                header = f"{'Symbol':<12} {'Interval':<10} {'Rate %':<12} {'APR %':<12} {'Status':<15}"
                 logger.info(header)
-                logger.info("-" * 100)
+                logger.info("-" * 110)
 
                 for c in all_candidates:
                     # Mark current position
@@ -1154,24 +1179,19 @@ class VolumeFarmingStrategy:
                         status = f"<{self.min_funding_apr}%"
 
                     symbol_display = f"{c['symbol']:<12}"
+
+                    # Display interval (e.g., "4h/6x")
+                    funding_freq = c.get('funding_freq', 3)
+                    interval_hours = 24 / funding_freq if funding_freq > 0 else 8
+                    interval_str = f"{int(interval_hours)}h/{funding_freq}x"
+                    interval_display = f"{interval_str:<10}"
+
                     rate = f"{c['funding_rate']*100:>11.4f}"
                     eff_apr = f"{c['effective_apr']:>11.2f}"
 
-                    # Format next funding time
-                    next_funding_raw = c.get('next_funding_time', 'N/A')
-                    if next_funding_raw and next_funding_raw != 'N/A':
-                        try:
-                            # Convert millisecond timestamp to UTC datetime
-                            next_funding_dt = datetime.utcfromtimestamp(int(next_funding_raw) / 1000)
-                            next_funding = next_funding_dt.strftime('%Y-%m-%d %H:%M UTC')
-                        except (ValueError, TypeError):
-                            next_funding = 'N/A'
-                    else:
-                        next_funding = 'N/A'
+                    logger.info(f"{color}{symbol_display} {interval_display} {rate} {eff_apr} {status:<15}{Style.RESET_ALL}")
 
-                    logger.info(f"{color}{symbol_display} {rate} {eff_apr} {next_funding:<20} {status:<15}{Style.RESET_ALL}")
-
-            logger.info("=" * 120)
+                logger.info("=" * 110)
 
             # Filter by minimum APR threshold (effective APR for 1x leverage)
             candidates = [
@@ -1180,12 +1200,12 @@ class VolumeFarmingStrategy:
             ]
 
             if not candidates:
-                logger.warning(f"\n{Fore.RED}No pairs meet minimum APR threshold of {self.min_funding_apr}%{Style.RESET_ALL}")
+                logger.warning(f"{Fore.RED}No pairs meet minimum APR threshold of {self.min_funding_apr}%{Style.RESET_ALL}")
                 return None
 
             # Announce selection
             best = candidates[0]
-            logger.info(f"\n{Fore.GREEN}>>> Selected: {best['symbol']} with {best['effective_apr']:.2f}% effective APR{Style.RESET_ALL}")
+            logger.info(f"{Fore.GREEN}>>> Selected: {best['symbol']} with {best['effective_apr']:.2f}% effective APR{Style.RESET_ALL}")
 
             return best
 
@@ -1515,11 +1535,36 @@ class VolumeFarmingStrategy:
                 current_apr = self.current_position.get('effective_apr', 0)
                 new_apr = current_best.get('effective_apr', 0)
                 apr_improvement = new_apr - current_apr
+                best_symbol = current_best['symbol']
 
-                # Only rotate if improvement is > 10% APR points AND we've held for at least 4 hours
-                if apr_improvement > 10.0 and hours_elapsed >= 4.0:
-                    logger.info(f"{Fore.YELLOW}Better opportunity found: {Fore.MAGENTA}{current_best['symbol']}{Style.RESET_ALL} ({Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} vs {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}) - improvement: {Fore.GREEN}+{apr_improvement:.2f}%{Style.RESET_ALL}")
-                    return True
+                # CRITICAL: Don't rotate if the best opportunity is the same symbol we're already holding
+                # Even if APR improved, closing and reopening the same position wastes fees
+                if best_symbol == symbol:
+                    logger.info(f"{Fore.CYAN}Best opportunity is current position ({Fore.MAGENTA}{symbol}{Fore.CYAN}), continuing to hold...{Style.RESET_ALL}")
+                    # Still log if APR improved significantly for visibility
+                    if apr_improvement > 10.0:
+                        logger.info(f"  {Fore.GREEN}APR improved by +{apr_improvement:.2f}% ({current_apr:.2f}% → {new_apr:.2f}%){Style.RESET_ALL}")
+                else:
+                    # Only rotate if improvement is > 10% APR points AND we've held for at least 4 hours AND it's a different symbol
+                    if apr_improvement > 10.0 and hours_elapsed >= 4.0:
+                        logger.info(f"{Fore.YELLOW}Better opportunity found: {Fore.MAGENTA}{best_symbol}{Style.RESET_ALL} ({Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} vs {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}) - improvement: {Fore.GREEN}+{apr_improvement:.2f}%{Style.RESET_ALL}")
+                        return True
+
+                    # Check 3b: Forced rotation (multiplicative improvement) - only for different symbols
+                    if self.enable_forced_rotation and hours_elapsed >= self.forced_rotation_min_hours:
+                        required_apr = current_apr * self.forced_rotation_apr_multiplier
+                        if new_apr >= required_apr:
+                            apr_multiplier = new_apr / current_apr if current_apr > 0 else 0
+                            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                            logger.info(f"{Fore.YELLOW}FORCED ROTATION TRIGGERED!{Style.RESET_ALL}")
+                            logger.info(f"  Current position: {Fore.MAGENTA}{symbol}{Style.RESET_ALL}")
+                            logger.info(f"  New opportunity: {Fore.MAGENTA}{best_symbol}{Style.RESET_ALL}")
+                            logger.info(f"  Current APR: {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}")
+                            logger.info(f"  New APR: {Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} ({Fore.MAGENTA}{apr_multiplier:.2f}x{Style.RESET_ALL})")
+                            logger.info(f"  Required multiplier: {Fore.CYAN}{self.forced_rotation_apr_multiplier}x{Style.RESET_ALL}")
+                            logger.info(f"  Position age: {Fore.CYAN}{hours_elapsed:.2f}{Style.RESET_ALL} hours (min: {Fore.CYAN}{self.forced_rotation_min_hours}{Style.RESET_ALL} hours)")
+                            logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                            return True
 
             # Check 4: Position age exceeded
             if time_elapsed > self.max_position_age:
@@ -1667,7 +1712,10 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
         'max_position_age_hours': 24,
         'use_funding_ma': True,
         'funding_ma_periods': 10,
-        'leverage': 1
+        'leverage': 1,
+        'enable_forced_rotation': True,
+        'forced_rotation_min_hours': 4.0,
+        'forced_rotation_apr_multiplier': 2.0
     }
 
     if not os.path.exists(config_file):
@@ -1699,6 +1747,9 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
             config['fee_coverage_multiplier'] = pm.get('fee_coverage_multiplier', config['fee_coverage_multiplier'])
             config['max_position_age_hours'] = pm.get('max_position_age_hours', config['max_position_age_hours'])
             config['loop_interval_seconds'] = pm.get('loop_interval_seconds', config['loop_interval_seconds'])
+            config['enable_forced_rotation'] = pm.get('enable_forced_rotation', config['enable_forced_rotation'])
+            config['forced_rotation_min_hours'] = pm.get('forced_rotation_min_hours', config['forced_rotation_min_hours'])
+            config['forced_rotation_apr_multiplier'] = pm.get('forced_rotation_apr_multiplier', config['forced_rotation_apr_multiplier'])
 
         # Leverage settings (support both old 'risk_management' and new 'leverage_settings' for backward compatibility)
         if 'leverage_settings' in config_data:
@@ -1751,7 +1802,10 @@ async def main():
         max_position_age_hours=config['max_position_age_hours'],
         use_funding_ma=config['use_funding_ma'],
         funding_ma_periods=config['funding_ma_periods'],
-        leverage=config['leverage']
+        leverage=config['leverage'],
+        enable_forced_rotation=config['enable_forced_rotation'],
+        forced_rotation_min_hours=config['forced_rotation_min_hours'],
+        forced_rotation_apr_multiplier=config['forced_rotation_apr_multiplier']
     )
 
     try:
