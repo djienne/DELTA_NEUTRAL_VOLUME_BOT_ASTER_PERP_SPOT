@@ -219,6 +219,9 @@ All configuration in `config_volume_farming_strategy.json`:
 - `fee_coverage_multiplier`: Close when funding ≥ fees × multiplier (default: 0.2 for fast rotation and airdrop farming)
 - `max_position_age_hours`: Max hold time (default: 336 hours)
 - `loop_interval_seconds`: Cycle interval (default: 300 seconds = 5 minutes)
+- `enable_forced_rotation`: Enable forced rotation when better opportunity exists (default: true)
+- `forced_rotation_min_hours`: Minimum hours before considering forced rotation (default: 4.0)
+- `forced_rotation_apr_multiplier`: New APR must be at least this multiplier × current APR (default: 2.0)
 
 **Leverage Settings:**
 - `leverage`: Perpetual leverage 1-3 (default: 1)
@@ -282,6 +285,26 @@ All configuration in `config_volume_farming_strategy.json`:
    - 3x leverage: -24%
 4. **Testing**: Use `calculate_safe_stoploss.py` to validate calculations
 5. **Modification**: Only change `maintenance_margin` or `safety_buffer` parameters in the function
+
+### When Modifying Forced Rotation Logic
+
+**IMPORTANT**: Forced rotation is separate from the existing absolute APR improvement rotation (+10% APR points).
+
+1. **Two rotation mechanisms exist**:
+   - Absolute improvement: Rotates if new APR > current APR + 10% points (e.g., 10% → 20.1%)
+   - Forced rotation: Rotates if new APR ≥ current APR × multiplier (e.g., 8% → 16% with 2x multiplier)
+2. **Both checks run independently** - Either can trigger rotation
+3. **Configuration in `position_management` section**:
+   - `enable_forced_rotation`: Boolean to enable/disable (default: true)
+   - `forced_rotation_min_hours`: Minimum position age before considering (default: 4.0)
+   - `forced_rotation_apr_multiplier`: Required APR multiplier (default: 2.0)
+4. **Implementation location**: `volume_farming_strategy.py:1542-1555` in `_should_close_position()`
+5. **Logging format**: Use yellow color with detailed comparison showing multiplier achieved
+6. **Use cases**:
+   - Low APR positions (5% → 10%+ triggers with 2x)
+   - Medium APR positions (10% → 20%+ triggers with 2x)
+   - Prevents staying in weak positions when much better opportunities exist
+7. **Testing**: Test with different multipliers (1.5x, 2x, 3x) to find optimal balance
 
 ### When Modifying Funding Rate Display
 
@@ -467,6 +490,23 @@ The bot tracks three types of position PnL:
 - Displayed in `YYYY-MM-DD HH:MM UTC` format in funding rate tables
 - Same for all symbols since funding is synchronized across perpetuals
 
+### Forced Rotation Behavior
+The bot implements two independent rotation mechanisms:
+
+1. **Absolute APR Improvement Rotation** (hardcoded):
+   - Triggers if: new APR > current APR + 10% points
+   - AND position age ≥ 4 hours
+   - Example: 10% → 20.1% triggers rotation
+
+2. **Forced Rotation** (configurable):
+   - Triggers if: new APR ≥ current APR × multiplier
+   - AND position age ≥ `forced_rotation_min_hours`
+   - AND `enable_forced_rotation = true`
+   - Example with 2x multiplier: 8% → 16%+ triggers rotation
+   - Logging: Yellow banner with detailed comparison
+
+Either mechanism can trigger rotation independently. Both exist to optimize capital allocation.
+
 ### Health Check Validation
 - Leverage must be in valid range 1x-3x (not hardcoded to 1x)
 - Imbalance threshold: Critical if >10%, warning if >5%
@@ -520,8 +560,29 @@ python calculate_safe_stoploss.py
 - Bot not trading despite positive MA → Check if current funding rate is negative; bot filters on current rate, not MA
 - Bot filtering pairs with good funding → Run `check_spot_perp_spreads.py` to check if spot-perp spread exceeds 0.15%
 - API parameter errors in utilities → Ensure using `apiv1_public`/`apiv1_private` (not `_key` suffix)
+- Forced rotation not triggering → Check `forced_rotation_min_hours` (position age) and `forced_rotation_apr_multiplier` (APR requirement); verify `enable_forced_rotation = true` in config
+- Rotations too frequent → Increase `forced_rotation_min_hours` or `forced_rotation_apr_multiplier`; or disable with `enable_forced_rotation = false`
 
 ## Recent Improvements (2025-10)
+
+### Forced Rotation Feature (NEW)
+- **New feature**: Configurable forced rotation when significantly better APR opportunities exist
+- **Enabled by default**: Automatically rotates to capitalize on much better funding rates
+- **Configuration**:
+  - `enable_forced_rotation`: Toggle feature on/off (default: true)
+  - `forced_rotation_min_hours`: Minimum position age before considering rotation (default: 4.0 hours)
+  - `forced_rotation_apr_multiplier`: Required APR multiplier to trigger rotation (default: 2.0 = 2x better)
+- **Logic**: Separate from absolute APR improvement rotation (+10% points)
+  - Absolute rotation: 10% → 20.1% triggers (fixed 10% improvement threshold)
+  - Forced rotation: 8% → 16%+ triggers with 2x multiplier (multiplicative threshold)
+- **Use cases**:
+  - Low APR positions: Forces exit from 5% position when 10%+ opportunity exists
+  - Medium APR positions: Rotates from 10% to 20%+ when available
+  - Prevents staying in weak positions when market conditions improve significantly
+- **Implementation**: `volume_farming_strategy.py:1542-1555` in `_should_close_position()`
+- **Logging**: Yellow-colored banner with detailed APR comparison and multiplier achieved
+- **Backward compatible**: Works with old config files using defaults
+- **Location**: All updates in `config_volume_farming_strategy.json`, `volume_farming_strategy.py`, `load_config()`
 
 ### Hybrid MA Calculation for Funding Rates (NEW)
 - **New behavior**: MA mode now uses a hybrid calculation combining current and historical rates

@@ -12,16 +12,22 @@
     "use_funding_ma": false,
     "funding_ma_periods": 10,
     "_comment_apr": "Minimum effective APR (%) to consider opening a position",
-    "_comment_ma": "Use moving average for stable signals, periods = number of historical rates (10 = ~3.3 days)"
+    "_comment_ma": "Use moving average for stable signals, periods = number of historical rates"
   },
 
   "position_management": {
     "fee_coverage_multiplier": 0.2,
     "max_position_age_hours": 336,
     "loop_interval_seconds": 300,
+    "enable_forced_rotation": true,
+    "forced_rotation_min_hours": 8.0,
+    "forced_rotation_apr_multiplier": 2.0,
     "_comment_fee_coverage": "Close when funding received >= this multiplier × total fees (1.5 = 150%). Some margin to also cover spreads.",
     "_comment_max_age": "Maximum hours to hold a position before forcing rotation",
-    "_comment_check_interval": "Seconds between position evaluation cycles (300 = 5 minutes)"
+    "_comment_check_interval": "Seconds between position evaluation cycles (300 = 5 minutes)",
+    "_comment_forced_rotation": "Enable forced rotation when a better opportunity exists (enabled by default)",
+    "_comment_forced_rotation_min_hours": "Minimum hours before considering forced rotation (default: 4.0)",
+    "_comment_forced_rotation_multiplier": "New APR must be at least this multiplier × current APR to force rotation (default: 2.0 = 2x better)"
   },
 
   "leverage_settings": {

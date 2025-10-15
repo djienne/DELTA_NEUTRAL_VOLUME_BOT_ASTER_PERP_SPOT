@@ -64,7 +64,10 @@ class VolumeFarmingStrategy:
         max_position_age_hours: int = 24,
         use_funding_ma: bool = True,
         funding_ma_periods: int = 10,
-        leverage: int = 1
+        leverage: int = 1,
+        enable_forced_rotation: bool = True,
+        forced_rotation_min_hours: float = 4.0,
+        forced_rotation_apr_multiplier: float = 2.0
     ):
         """
         Initialize the volume farming strategy.
@@ -78,6 +81,9 @@ class VolumeFarmingStrategy:
             use_funding_ma: Use moving average of funding rates instead of instantaneous
             funding_ma_periods: Number of periods for funding rate moving average
             leverage: Leverage multiplier (1-3). 1=50/50, 2=33% perp/67% spot, 3=25% perp/75% spot
+            enable_forced_rotation: Enable forced rotation when better opportunity exists
+            forced_rotation_min_hours: Minimum hours before considering forced rotation
+            forced_rotation_apr_multiplier: New APR must be at least this multiplier × current APR
         """
         # Validate leverage
         if leverage < 1 or leverage > 3:
@@ -100,6 +106,9 @@ class VolumeFarmingStrategy:
         self.use_funding_ma = use_funding_ma
         self.funding_ma_periods = funding_ma_periods
         self.leverage = leverage
+        self.enable_forced_rotation = enable_forced_rotation
+        self.forced_rotation_min_hours = forced_rotation_min_hours
+        self.forced_rotation_apr_multiplier = forced_rotation_apr_multiplier
 
         # Calculate emergency stop-loss automatically based on leverage
         # This ensures we stay safely away from liquidation
@@ -1530,6 +1539,21 @@ class VolumeFarmingStrategy:
                     logger.info(f"{Fore.YELLOW}Better opportunity found: {Fore.MAGENTA}{current_best['symbol']}{Style.RESET_ALL} ({Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} vs {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}) - improvement: {Fore.GREEN}+{apr_improvement:.2f}%{Style.RESET_ALL}")
                     return True
 
+                # Check 3b: Forced rotation (multiplicative improvement)
+                if self.enable_forced_rotation and hours_elapsed >= self.forced_rotation_min_hours:
+                    required_apr = current_apr * self.forced_rotation_apr_multiplier
+                    if new_apr >= required_apr:
+                        apr_multiplier = new_apr / current_apr if current_apr > 0 else 0
+                        logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                        logger.info(f"{Fore.YELLOW}FORCED ROTATION TRIGGERED!{Style.RESET_ALL}")
+                        logger.info(f"  New opportunity: {Fore.MAGENTA}{current_best['symbol']}{Style.RESET_ALL}")
+                        logger.info(f"  Current APR: {Fore.CYAN}{current_apr:.2f}%{Style.RESET_ALL}")
+                        logger.info(f"  New APR: {Fore.GREEN}{new_apr:.2f}%{Style.RESET_ALL} ({Fore.MAGENTA}{apr_multiplier:.2f}x{Style.RESET_ALL})")
+                        logger.info(f"  Required multiplier: {Fore.CYAN}{self.forced_rotation_apr_multiplier}x{Style.RESET_ALL}")
+                        logger.info(f"  Position age: {Fore.CYAN}{hours_elapsed:.2f}{Style.RESET_ALL} hours (min: {Fore.CYAN}{self.forced_rotation_min_hours}{Style.RESET_ALL} hours)")
+                        logger.info(f"{Fore.YELLOW}{'='*80}{Style.RESET_ALL}")
+                        return True
+
             # Check 4: Position age exceeded
             if time_elapsed > self.max_position_age:
                 logger.warning(f"{Fore.YELLOW}Position age exceeded {Fore.MAGENTA}{self.max_position_age.total_seconds()/3600:.1f}{Fore.YELLOW} hours - rotating...{Style.RESET_ALL}")
@@ -1676,7 +1700,10 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
         'max_position_age_hours': 24,
         'use_funding_ma': True,
         'funding_ma_periods': 10,
-        'leverage': 1
+        'leverage': 1,
+        'enable_forced_rotation': True,
+        'forced_rotation_min_hours': 4.0,
+        'forced_rotation_apr_multiplier': 2.0
     }
 
     if not os.path.exists(config_file):
@@ -1708,6 +1735,9 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
             config['fee_coverage_multiplier'] = pm.get('fee_coverage_multiplier', config['fee_coverage_multiplier'])
             config['max_position_age_hours'] = pm.get('max_position_age_hours', config['max_position_age_hours'])
             config['loop_interval_seconds'] = pm.get('loop_interval_seconds', config['loop_interval_seconds'])
+            config['enable_forced_rotation'] = pm.get('enable_forced_rotation', config['enable_forced_rotation'])
+            config['forced_rotation_min_hours'] = pm.get('forced_rotation_min_hours', config['forced_rotation_min_hours'])
+            config['forced_rotation_apr_multiplier'] = pm.get('forced_rotation_apr_multiplier', config['forced_rotation_apr_multiplier'])
 
         # Leverage settings (support both old 'risk_management' and new 'leverage_settings' for backward compatibility)
         if 'leverage_settings' in config_data:
@@ -1760,7 +1790,10 @@ async def main():
         max_position_age_hours=config['max_position_age_hours'],
         use_funding_ma=config['use_funding_ma'],
         funding_ma_periods=config['funding_ma_periods'],
-        leverage=config['leverage']
+        leverage=config['leverage'],
+        enable_forced_rotation=config['enable_forced_rotation'],
+        forced_rotation_min_hours=config['forced_rotation_min_hours'],
+        forced_rotation_apr_multiplier=config['forced_rotation_apr_multiplier']
     )
 
     try:

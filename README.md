@@ -17,7 +17,8 @@ The bot operates in a continuous loop:
 1.  **Health Check**: Verifies account health, balances, and existing positions before any action.
 2.  **Position Monitoring**: If a position is open, it's monitored for exit conditions:
     *   Funding payments cover entry/exit fees (configurable multiplier).
-    *   A better funding rate opportunity is found.
+    *   A better funding rate opportunity is found (absolute +10% APR improvement after 4 hours).
+    *   Forced rotation: A significantly better opportunity exists (configurable multiplier, default 2x APR after 4 hours).
     *   Maximum position age is reached.
     *   Emergency stop-loss is triggered.
 3.  **Opportunity Scanning**: If no position is open, it scans all delta-neutral pairs for the most profitable and stable funding rate APR, filtering out:
@@ -35,6 +36,7 @@ The bot operates in a continuous loop:
 -   **Funding Rate Arbitrage**: Profits from collecting funding payments on perpetuals (every 8 hours at 00:00, 08:00, 16:00 UTC).
 -   **Configurable Leverage**: Support for 1x-3x leverage with automatic capital allocation and safe transitions.
 -   **Hybrid MA Filtering**: Uses a moving average of funding rates (combining 1 current/next rate + N-1 historical rates) to balance responsiveness with stability, while displaying both MA and current APR for comparison.
+-   **Forced Rotation**: Automatically rotates to significantly better opportunities when position age threshold is met (configurable, enabled by default).
 -   **Dynamic Pair Discovery**: Automatically finds all tradable delta-neutral pairs.
 -   **Volume Filtering**: Only trades pairs with ≥ $250M 24h volume to ensure sufficient liquidity and minimize slippage.
 -   **Negative Rate Filtering**: Automatically excludes pairs with negative current funding rates, even if their MA is positive.
@@ -132,6 +134,11 @@ This is useful for:
 
 ### 1. Clone the Repository
 
+```bash
+git clone <repository_url>
+cd DELTA_NEUTRAL_VOLUME_BOT_ASTER
+```
+
 ### 2. Set Up API Keys
 
 Create a `.env` file from the example and add your API credentials.
@@ -202,12 +209,11 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 | `max_position_age_hours`  | Maximum hours to hold a position before rotating.                           | `336`   |
 | `loop_interval_seconds`   | Seconds to wait between each strategy cycle (300 = 5 minutes).              | `300`   |
 | `leverage`                | Leverage for perpetual positions (1-3). Higher = more capital efficient.    | `1`     |
+| `enable_forced_rotation`  | Enable forced rotation when a significantly better opportunity exists.      | `true`  |
+| `forced_rotation_min_hours` | Minimum hours before considering forced rotation to better opportunity.   | `4.0`   |
+| `forced_rotation_apr_multiplier` | New APR must be at least this multiplier × current APR to force rotation. | `2.0` |
 
 **Note:** Stop-loss is **automatically calculated** based on leverage (not a manual parameter).
-
-### 4. Put USDT on the account (perp or spot, it will automatically rebalance)
-* **If BTC is selected as best opportunity, you may need at least 0.001 BTC times 2 in USDT (Aster's limitation)**, so about >235 USDT (as of October 14th, 2025)
-* Avoid having asBNB or USDF for perp account collateral, it may cause problems. Only have USDT.
 
 ## 🚀 Usage
 
