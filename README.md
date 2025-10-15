@@ -17,7 +17,6 @@ The bot operates in a continuous loop:
 1.  **Health Check**: Verifies account health, balances, and existing positions before any action.
 2.  **Position Monitoring**: If a position is open, it's monitored for exit conditions:
     *   Funding payments cover entry/exit fees (configurable multiplier).
-    *   A better funding rate opportunity is found (absolute +10% APR improvement after 4 hours).
     *   Forced rotation: A significantly better opportunity exists (configurable multiplier, default 2x APR after 4 hours).
     *   Maximum position age is reached.
     *   Emergency stop-loss is triggered.
