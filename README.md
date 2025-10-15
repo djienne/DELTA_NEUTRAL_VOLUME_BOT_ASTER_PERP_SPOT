@@ -16,11 +16,11 @@ The bot operates in a continuous loop:
 
 1.  **Health Check**: Verifies account health, balances, and existing positions before any action.
 2.  **Position Monitoring**: If a position is open, it's monitored for exit conditions:
-    *   Funding payments cover entry/exit fees (configurable multiplier).
-    *   Forced rotation: A **different symbol** with significantly better opportunity exists (configurable multiplier, default 2x APR after 4 hours).
+    *   **Fee coverage**: Funding payments cover entry/exit fees (configurable multiplier). When reached, closes position and reopens best opportunity (can be same or different symbol).
+    *   **Opportunistic rotation**: A **different symbol** with significantly better opportunity exists (configurable multiplier, default 2x APR after 4 hours). Only rotates to different symbols to avoid wasting fees.
     *   Maximum position age is reached.
     *   Emergency stop-loss is triggered.
-    *   **Note**: Rotations only trigger when a different symbol offers better opportunity. If the current symbol's APR improves, the bot continues holding to avoid wasting fees.
+    *   **Note**: Same-symbol rotation prevention applies only to opportunistic rotations (better APR found). Fee coverage always closes and reopens, even if same symbol remains best.
 3.  **Opportunity Scanning**: If no position is open, it scans all delta-neutral pairs for the most profitable and stable funding rate APR, filtering out:
     *   Pairs with negative current funding rates (even if MA is positive).
     *   Pairs with < $250M 24h trading volume.

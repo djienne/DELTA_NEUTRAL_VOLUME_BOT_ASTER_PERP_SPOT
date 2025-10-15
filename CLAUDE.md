@@ -291,13 +291,16 @@ All configuration in `config_volume_farming_strategy.json`:
 
 **IMPORTANT**: Forced rotation is separate from the existing absolute APR improvement rotation (+10% APR points).
 
-**CRITICAL**: ALWAYS check that the best opportunity is a **different symbol** before rotating. Never close and reopen the same symbol, even if APR improved dramatically - this wastes fees.
+**CRITICAL**: ALWAYS check that the best opportunity is a **different symbol** before opportunistic rotations. Never close and reopen the same symbol for opportunistic rotations (before fees are covered) - this wastes fees.
 
-1. **Two rotation mechanisms exist**:
+**IMPORTANT**: The symbol equality check applies ONLY to opportunistic rotations (better APR found). Do NOT apply this check to the fee coverage exit condition. When fees are covered, it's safe to close and reopen even the same symbol.
+
+1. **Three exit conditions exist**:
+   - Fee coverage: Closes when funding ≥ fees × multiplier, reopens best opportunity (same symbol OK)
    - Absolute improvement: Rotates if new APR > current APR + 10% points AND **different symbol** (e.g., BTCUSDT 10% → ETHUSDT 20.1%)
    - Forced rotation: Rotates if new APR ≥ current APR × multiplier AND **different symbol** (e.g., BTCUSDT 8% → ETHUSDT 16% with 2x multiplier)
-2. **Both checks run independently** - Either can trigger rotation
-3. **Symbol equality check is mandatory** - Before any rotation check:
+2. **Both opportunistic checks run independently** - Either can trigger early rotation
+3. **Symbol equality check for opportunistic rotations only** - Before rotation checks (NOT fee coverage):
    - Compare `best_symbol == current_symbol`
    - If same: Log "continuing to hold" and show APR improvement for visibility
    - If different: Proceed with rotation checks
@@ -497,28 +500,38 @@ The bot tracks three types of position PnL:
 - Displayed in `YYYY-MM-DD HH:MM UTC` format in funding rate tables
 - Same for all symbols since funding is synchronized across perpetuals
 
-### Forced Rotation Behavior
-The bot implements two independent rotation mechanisms:
+### Position Exit and Rotation Behavior
+The bot implements multiple exit conditions with different behaviors regarding same-symbol reopening:
 
-**CRITICAL**: Rotations only trigger when a **different symbol** offers better opportunity. If the best opportunity is the current symbol (even with improved APR), the bot continues holding to avoid wasting fees on unnecessary close/reopen.
+**Exit Conditions:**
 
-1. **Absolute APR Improvement Rotation** (hardcoded):
+1. **Fee Coverage Exit** (Check 1 - highest priority):
+   - Triggers when: funding received ≥ total fees × `fee_coverage_multiplier`
+   - Behavior: Closes position → Scans for best opportunity → Reopens (can be same or different symbol)
+   - Rationale: Fees already covered, safe to close. If same symbol still best, reopening makes sense.
+   - Example: ASTERUSDT fees covered → Close → ASTERUSDT still best @ 89% APR → Reopen ASTERUSDT
+
+2. **Absolute APR Improvement Rotation** (Check 3a - opportunistic):
    - Triggers if: new APR > current APR + 10% points
    - AND position age ≥ 4 hours
    - AND best opportunity is a **different symbol**
+   - Behavior: Only rotates to different symbols
+   - Rationale: Avoid wasting fees closing/reopening same symbol before fees are covered
    - Example: 10% BTCUSDT → 20.1% ETHUSDT triggers rotation
    - Example: 10% BTCUSDT → 20.1% BTCUSDT does NOT trigger (same symbol)
 
-2. **Forced Rotation** (configurable):
+3. **Forced Rotation** (Check 3b - opportunistic, configurable):
    - Triggers if: new APR ≥ current APR × multiplier
    - AND position age ≥ `forced_rotation_min_hours`
    - AND `enable_forced_rotation = true`
    - AND best opportunity is a **different symbol**
+   - Behavior: Only rotates to different symbols
+   - Rationale: Avoid wasting fees closing/reopening same symbol before fees are covered
    - Example with 2x multiplier: 8% BTCUSDT → 16%+ ETHUSDT triggers rotation
    - Example with 2x multiplier: 8% BTCUSDT → 16%+ BTCUSDT does NOT trigger (same symbol)
    - Logging: Yellow banner with detailed comparison
 
-Either mechanism can trigger rotation independently. Both exist to optimize capital allocation across different pairs.
+**CRITICAL**: The symbol equality check applies ONLY to opportunistic rotations (checks 3a and 3b). Fee coverage exit (check 1) always closes and reopens with best opportunity, regardless of symbol, because fees are already covered.
 
 ### Health Check Validation
 - Leverage must be in valid range 1x-3x (not hardcoded to 1x)
@@ -580,15 +593,16 @@ python calculate_safe_stoploss.py
 ## Recent Improvements (2025-10)
 
 ### Same-Symbol Rotation Prevention (NEW - 2025-10-15)
-- **Bug fix**: Bot no longer rotates when the best opportunity is the same symbol as current position
+- **Bug fix**: Bot no longer does opportunistic rotations when the best opportunity is the same symbol as current position
 - **Previous behavior**: Would close and reopen same symbol if APR improved significantly (e.g., ASTERUSDT 12% → 89%), wasting fees
-- **New behavior**: Checks `best_symbol == current_symbol` before any rotation
+- **New behavior**: Checks `best_symbol == current_symbol` before opportunistic rotation
   - If same: Logs "continuing to hold" and shows APR improvement
-  - If different: Proceeds with normal rotation checks
-- **Benefit**: Prevents wasteful rotations that burn entry/exit fees (~0.20% total) without gaining anything
-- **Example**: ASTERUSDT 12% → ASTERUSDT 89% now continues holding instead of rotating
+  - If different: Proceeds with rotation checks
+- **Benefit**: Prevents wasteful opportunistic rotations that burn entry/exit fees (~0.20% total) without gaining anything
+- **Example**: ASTERUSDT 12% → ASTERUSDT 89% now continues holding instead of rotating early
 - **Implementation**: `volume_farming_strategy.py:1540-1567` in `_should_close_position()`
-- **Applies to both rotation mechanisms**: Absolute improvement (+10% APR) and forced rotation (multiplier-based)
+- **Applies to opportunistic rotations only**: Absolute improvement (+10% APR) and forced rotation (multiplier-based)
+- **IMPORTANT**: Fee coverage exit condition is NOT affected - when fees are covered, position closes and reopens with best opportunity (can be same symbol). This is intentional because fees are already covered.
 
 ### Forced Rotation Feature (NEW)
 - **New feature**: Configurable forced rotation when significantly better APR opportunities exist
