@@ -24,14 +24,16 @@
 >
 > **Configuration actuelle recommandée** (fichier JSON fourni):
 > - `capital_fraction`: 0.98 (98%)
+> - `min_volume_threshold`: 250000000
 > - `min_funding_apr`: 5.4%
 > - `fee_coverage_multiplier`: 1.5
 > - `loop_interval_seconds`: 300 (5 minutes)
 > - `max_position_age_hours`: 336 (14 jours)
 > - `leverage`: 1x (conservateur)
 >
-> **Valeurs codées en dur dans le code** (si config absent):
+> **Valeurs par défaut** (si config absent):
 > - `capital_fraction`: 0.95 (95%)
+> - `min_volume_threshold`: 250000000
 > - `min_funding_apr`: 15.0%
 > - `leverage`: 1x
 >

@@ -58,6 +58,7 @@ class VolumeFarmingStrategy:
     def __init__(
         self,
         capital_fraction: float = 0.95,
+        min_volume_threshold: int = 250_000_000,
         min_funding_apr: float = 15.0,
         fee_coverage_multiplier: float = 1.5,
         loop_interval_seconds: int = 300,  # 5 minutes
@@ -74,6 +75,7 @@ class VolumeFarmingStrategy:
 
         Args:
             capital_fraction: Fraction of total available USDT to deploy (0.95 = 95%)
+            min_volume_threshold: Minimum 24h volume threshold for a pair to be considered (in USDT)
             min_funding_apr: Minimum annualized funding APR to consider (%)
             fee_coverage_multiplier: Multiplier for fee coverage (1.5 = 150% of fees)
             loop_interval_seconds: Seconds between strategy loop cycles
@@ -99,6 +101,7 @@ class VolumeFarmingStrategy:
 
         # Strategy parameters
         self.capital_fraction = capital_fraction
+        self.min_volume_threshold = min_volume_threshold
         self.min_funding_apr = min_funding_apr
         self.fee_coverage_multiplier = fee_coverage_multiplier
         self.loop_interval_seconds = loop_interval_seconds
@@ -999,22 +1002,22 @@ class VolumeFarmingStrategy:
 
             # Fetch 24h volumes for filtering
             volumes = await self._get_24h_volumes()
-            min_volume_threshold = 250_000_000  # $250 million
+            # min_volume_threshold = 250_000_000  # $250 million
 
             # Filter pairs by volume (keep only pairs with >= $250M 24h volume)
             high_volume_pairs = []
             for symbol in available_pairs:
                 volume = volumes.get(symbol, 0)
-                if volume >= min_volume_threshold:
+                if volume >= self.min_volume_threshold:
                     high_volume_pairs.append(symbol)
                 else:
-                    logger.debug(f"Filtered out {symbol}: 24h volume ${volume:,.0f} < ${min_volume_threshold:,.0f}")
+                    logger.debug(f"Filtered out {symbol}: 24h volume ${volume:,.0f} < ${self.min_volume_threshold:,.0f}")
 
             if not high_volume_pairs:
-                logger.warning(f"No pairs meet minimum volume threshold of ${min_volume_threshold:,.0f}")
+                logger.warning(f"No pairs meet minimum volume threshold of ${self.min_volume_threshold:,.0f}")
                 return None
 
-            logger.info(f"{Fore.CYAN}Volume filter: {Fore.MAGENTA}{len(high_volume_pairs)}/{len(available_pairs)}{Fore.CYAN} pairs with >= {Fore.GREEN}${min_volume_threshold/1e6:.0f}M{Fore.CYAN} volume{Style.RESET_ALL}")
+            logger.info(f"{Fore.CYAN}Volume filter: {Fore.MAGENTA}{len(high_volume_pairs)}/{len(available_pairs)}{Fore.CYAN} pairs with >= {Fore.GREEN}${self.min_volume_threshold/1e6:.0f}M{Fore.CYAN} volume{Style.RESET_ALL}")
             logger.info(f"High-volume pairs: {Fore.YELLOW}{', '.join(high_volume_pairs)}{Style.RESET_ALL}")
 
             # Apply spread filtering (filter out pairs with spread > 0.15%)
@@ -1706,6 +1709,7 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
     """
     default_config = {
         'capital_fraction': 0.95,
+        'min_volume_threshold': 250_000_000,  # $250M
         'min_funding_apr': 15.0,
         'fee_coverage_multiplier': 1.5,
         'loop_interval_seconds': 300,
@@ -1737,6 +1741,7 @@ def load_config(config_file: str = 'config_volume_farming_strategy.json') -> Dic
         # Funding rate strategy
         if 'funding_rate_strategy' in config_data:
             frs = config_data['funding_rate_strategy']
+            config['min_volume_threshold'] = frs.get('min_volume_threshold', config['min_volume_threshold'])
             config['min_funding_apr'] = frs.get('min_funding_apr', config['min_funding_apr'])
             config['use_funding_ma'] = frs.get('use_funding_ma', config['use_funding_ma'])
             config['funding_ma_periods'] = frs.get('funding_ma_periods', config['funding_ma_periods'])
@@ -1796,6 +1801,7 @@ async def main():
     # Create and run strategy with config values
     strategy = VolumeFarmingStrategy(
         capital_fraction=config['capital_fraction'],
+        min_volume_threshold=config['min_volume_threshold'],
         min_funding_apr=config['min_funding_apr'],
         fee_coverage_multiplier=config['fee_coverage_multiplier'],
         loop_interval_seconds=config['loop_interval_seconds'],

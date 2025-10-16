@@ -22,9 +22,9 @@
 >
 > This guide documents the bot’s full feature set and architecture. The default values mentioned here may differ from your current configuration in `config_volume_farming_strategy.json`.
 >
-> **Recommended current configuration** (provided JSON file):
->
+> **Current recommended configuration** (provided JSON file):
 > * `capital_fraction`: 0.98 (98%)
+> - `min_volume_threshold`: 250000000
 > * `min_funding_apr`: 5.4%
 > * `fee_coverage_multiplier`: 1.5
 > * `loop_interval_seconds`: 300 (5 minutes)
@@ -32,8 +32,8 @@
 > * `leverage`: 1x (conservative)
 >
 > **Hard-coded fallback values** (if config is missing):
->
 > * `capital_fraction`: 0.95 (95%)
+> - `min_volume_threshold`: 250000000
 > * `min_funding_apr`: 15.0%
 > * `leverage`: 1x
 >
