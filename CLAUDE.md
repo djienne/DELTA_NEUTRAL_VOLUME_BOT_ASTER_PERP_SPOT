@@ -211,6 +211,7 @@ All configuration in `config_volume_farming_strategy.json`:
 - `capital_fraction`: Fraction of total USDT to deploy (default: 0.96)
 
 **Funding Rate Strategy:**
+- `min_volume_threshold`: Minimum 24h volume threshold for a pair to be considered (in USDT).
 - `min_funding_apr`: Minimum APR threshold (default: 5.4%)
 - `use_funding_ma`: Use hybrid MA (1 current + N-1 historical rates) for balanced responsiveness (default: false)
 - `funding_ma_periods`: MA periods (default: 10)

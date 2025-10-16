@@ -197,6 +197,7 @@ Edit `config_volume_farming_strategy.json` to tune the bot's parameters.
 | Parameter                 | Description                                                                 | Default |
 | ------------------------- | --------------------------------------------------------------------------- | ------- |
 | `capital_fraction`        | Percentage of available USDT to use per position.                           | `0.96`  |
+| `min_volume_threshold`    | Minimum 24h volume threshold for a pair to be considered (in USDT).         | `250_000_000` |
 | `min_funding_apr`         | Minimum annualized APR to consider for an opportunity.                      | `5.4`   |
 | `use_funding_ma`          | Use hybrid MA (current + historical rates) for balanced responsiveness.     | `false` |
 | `funding_ma_periods`      | Number of periods for the funding rate moving average.                      | `10`    |
