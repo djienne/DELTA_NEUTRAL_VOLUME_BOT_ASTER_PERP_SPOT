@@ -1,0 +1,29 @@
+# Core async HTTP client
+aiohttp>=3.8.0
+
+# Ethereum and crypto dependencies
+web3>=6.0.0
+eth-account>=0.8.0
+eth-abi>=4.0.0
+
+# Standard libraries (these are included with Python but listed for clarity)
+# asyncio - built-in
+# time - built-in
+# hmac - built-in
+# hashlib - built-in
+# json - built-in
+# math - built-in
+# os - built-in
+# urllib.parse - built-in
+# typing - built-in
+# unittest - built-in
+
+# Development and testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Environment configuration
+python-dotenv>=1.0.0
+
+# Terminal UI
+colorama>=0.4.6

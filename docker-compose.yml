@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  dn_bot:
+    build: .
+    container_name: dn_farming_bot
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: '512M'
+    env_file:
+      - .env
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./:/app/
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

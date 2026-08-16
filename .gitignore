@@ -1,0 +1,21 @@
+# Secrets — API_PRIVATE_KEY / APIV1_PRIVATE_KEY live here
+.env
+
+# Runtime state (position data, portfolio baseline)
+volume_farming_state.json
+
+# Logs
+volume_farming.log
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

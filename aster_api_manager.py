@@ -5,9 +5,11 @@ import time
 import hmac
 import hashlib
 import json
+import logging
 import urllib.parse
 import math
 from datetime import datetime
+from two_leg import LegStatus, classify_submission
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Tuple
 from collections import Counter
@@ -981,10 +983,57 @@ class AsterApiManager:
             )
 
             perp_result, spot_result = exec_results
-            trade_details['success'] = True
-            trade_details['message'] = f"Successfully opened position for {symbol}."
             trade_details['perp_order'] = perp_result
             trade_details['spot_order'] = spot_result
+
+            # Inspect BOTH results before claiming success.
+            #
+            # This used to set success=True and "Successfully opened position"
+            # unconditionally. With return_exceptions=True a rejected leg arrives as
+            # a value rather than a raise, so a filled perp SELL beside a rejected
+            # spot BUY was recorded as a hedge - leaving a NAKED SHORT reported as
+            # healthy. The state file corroborates the damage: total_positions_opened
+            # 22 vs closed 13.
+            perp_res = classify_submission(
+                "Aster-perp", perp_result, intent_qty=float(final_perp_qty),
+                symbol=symbol, side="sell",
+            )
+            spot_skipped = not (spot_qty_to_buy > Decimal('0.0001'))
+            spot_res = classify_submission(
+                "Aster-spot", spot_result, intent_qty=float(spot_qty_to_buy),
+                symbol=symbol, side="buy",
+            ) if not spot_skipped else None
+
+            failures = []
+            if perp_res.status is LegStatus.REJECTED:
+                failures.append(f"perp: {perp_res.error}")
+            if spot_res is not None and spot_res.status is LegStatus.REJECTED:
+                failures.append(f"spot: {spot_res.error}")
+            if spot_skipped:
+                failures.append(
+                    f"spot leg skipped (qty {spot_qty_to_buy} <= 0.0001); "
+                    f"the perp leg would be unhedged"
+                )
+
+            if failures:
+                trade_details['success'] = False
+                trade_details['message'] = (
+                    f"FAILED to open delta-neutral position for {symbol}: "
+                    + "; ".join(failures)
+                    + ". WARNING: any leg that DID fill is now unhedged - verify and "
+                      "flatten manually before retrying."
+                )
+                trade_details['leg_status'] = {
+                    'perp': perp_res.status.value,
+                    'spot': spot_res.status.value if spot_res else 'skipped',
+                }
+                return trade_details
+
+            trade_details['success'] = True
+            trade_details['message'] = (
+                f"Both legs accepted for {symbol}. Acceptance is not a fill - verify "
+                f"before treating this as hedged."
+            )
             return trade_details
 
         except Exception as e:
@@ -1024,10 +1073,42 @@ class AsterApiManager:
             )
 
             perp_result, spot_result = exec_results
-            close_details['success'] = True
-            close_details['message'] = f"Successfully closed position for {symbol}."
             close_details['perp_order'] = perp_result
             close_details['spot_order'] = spot_result
+
+            # Mirror of the open path. An unconditional success here meant a failed
+            # close left a live leg while the bot cleared state and moved on.
+            perp_res = classify_submission(
+                "Aster-perp", perp_result, intent_qty=float(perp_quantity),
+                symbol=symbol, side=side_to_close.lower(),
+            )
+            spot_res = classify_submission(
+                "Aster-spot", spot_result, intent_qty=float(spot_quantity),
+                symbol=symbol, side="sell",
+            )
+
+            failures = []
+            if perp_res.status is LegStatus.REJECTED:
+                failures.append(f"perp: {perp_res.error}")
+            if spot_res.status is LegStatus.REJECTED:
+                failures.append(f"spot: {spot_res.error}")
+
+            if failures:
+                close_details['success'] = False
+                close_details['message'] = (
+                    f"FAILED to close position for {symbol}: " + "; ".join(failures)
+                    + ". The position is STILL OPEN - do not clear it from state."
+                )
+                close_details['leg_status'] = {
+                    'perp': perp_res.status.value, 'spot': spot_res.status.value,
+                }
+                return close_details
+
+            close_details['success'] = True
+            close_details['message'] = (
+                f"Both close legs accepted for {symbol}. Verify flat before treating "
+                f"this position as closed."
+            )
             return close_details
 
         except Exception as e:

@@ -742,13 +742,22 @@ class VolumeFarmingStrategy:
 
                 logger.info(f"{Fore.CYAN}{'='*80}{Style.RESET_ALL}")
 
-                # Step 1: Perform health check
-                if not await self._perform_health_check():
-                    logger.warning("Health check failed. Waiting before retry...")
-                    await asyncio.sleep(self.loop_interval_seconds)
-                    continue
-
-                # Step 2: Check if we have an open position
+                # Step 1: Monitor any EXISTING position first.
+                #
+                # ORDER MATTERS. The health check used to run here and `continue` on
+                # failure, which skipped position monitoring entirely -- including
+                # the stop-loss.
+                #
+                # That made the stop unreachable in exactly the situation it exists
+                # for: AsterApiManager raises a CRITICAL health issue once the short
+                # leg's PnL reaches -50%, while the auto-calculated stop-loss at 1x
+                # leverage is -70%. So as a position moved from -50% toward -70%,
+                # every cycle failed the health check, hit `continue`, and never
+                # evaluated the stop. The position then ran unimpeded to
+                # liquidation.
+                #
+                # Risk management must not be gated behind a check that fails
+                # because risk is materialising.
                 if self.current_position:
                     # Check if leverage setting has changed
                     if self.position_leverage and self.position_leverage != self.leverage:
@@ -764,6 +773,13 @@ class VolumeFarmingStrategy:
                         logger.info(f"{Fore.CYAN}Holding position on {Fore.MAGENTA}{self.current_position['symbol']}{Style.RESET_ALL}")
                         await asyncio.sleep(self.loop_interval_seconds)
                         continue
+
+                # Step 2: Health check now gates only the OPENING of a NEW position.
+                # Monitoring and the stop-loss above run regardless of its result.
+                if not await self._perform_health_check():
+                    logger.warning("Health check failed. Not opening a new position this cycle.")
+                    await asyncio.sleep(self.loop_interval_seconds)
+                    continue
 
                 # Step 3: Scan for best funding rate opportunity
                 best_opportunity = await self._find_best_funding_opportunity()
@@ -1606,8 +1622,24 @@ class VolumeFarmingStrategy:
             result = await self.api_manager.execute_dn_position_close(symbol)
 
             if result.get('success'):
-                # Calculate net profit/loss
-                net_profit = self.total_funding_received - self.entry_fees_paid
+                # Calculate net profit/loss.
+                #
+                # EXIT FEES WERE MISSING. This was `funding - entry_fees`, which
+                # omits the exit side entirely, so every closed cycle reported a
+                # profit roughly one full exit-fee too high. The state file's
+                # total_profit_loss of +3.11 was computed this way and is therefore
+                # overstated by ~13 x exit_fee.
+                #
+                # Entry charges BOTH legs (~0.1% x 2 = 0.2%); exit charges the perp
+                # leg plus the spot sale, and the code already computes exactly this
+                # estimate a few lines above under the same name.
+                position_value = self.current_position.get('capital', 0)
+                exit_fees_estimate = position_value * 0.001  # matches the monitor path
+                net_profit = (
+                    self.total_funding_received
+                    - self.entry_fees_paid
+                    - exit_fees_estimate
+                )
                 self.total_profit_loss += net_profit
                 self.total_positions_closed += 1
                 self.cycle_count += 1  # Increment trading cycle on successful close
@@ -1616,7 +1648,9 @@ class VolumeFarmingStrategy:
                 logger.info(f"{Fore.GREEN}✓ Position closed successfully! (Trading Cycle #{self.cycle_count} Completed){Style.RESET_ALL}")
                 logger.info(f"{Fore.GREEN}{'='*80}{Style.RESET_ALL}")
                 logger.info(f"  Total funding received: {Fore.GREEN}${self.total_funding_received:.4f}{Style.RESET_ALL}")
-                logger.info(f"  Total fees paid: {Fore.YELLOW}${self.entry_fees_paid:.4f}{Style.RESET_ALL}")
+                logger.info(f"  Entry fees paid:  {Fore.YELLOW}${self.entry_fees_paid:.4f}{Style.RESET_ALL}")
+                logger.info(f"  Exit fees (est):  {Fore.YELLOW}${exit_fees_estimate:.4f}{Style.RESET_ALL}")
+                logger.info(f"  Round-trip fees:  {Fore.YELLOW}${self.entry_fees_paid + exit_fees_estimate:.4f}{Style.RESET_ALL}")
 
                 net_profit_color = Fore.GREEN if net_profit >= 0 else Fore.RED
                 logger.info(f"  Net profit (this position): {net_profit_color}${net_profit:.4f}{Style.RESET_ALL}")
