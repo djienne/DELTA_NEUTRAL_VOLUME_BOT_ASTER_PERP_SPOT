@@ -33,7 +33,7 @@ A live-money delta-neutral funding carry bot on Aster DEX: long spot + short per
 
 ## Strategy rules
 
-- **Selection.** Candidate filters: on both markets, interval published, predicted rate ≥ 0, 24h spot+perp volume ≥ $250M, |perp−spot mid basis| ≤ 0.15%.
+- **Selection.** Candidate filters: on both markets, two-sided spot and perp books (empty sides report `0.00000`, and several spot books are one-sided), interval published, predicted rate ≥ 0, 24h spot+perp volume ≥ $250M, |perp−spot mid basis| ≤ 0.15%.
   - Rank by `funding_avg_days` average APR: the last `days×24/interval − 1` settled rates plus the predicted rate.
   - Entry requires APR ≥ `min_funding_apr`.
 - **Funding intervals vary per symbol (1h/4h/8h) and change over time.** Always use `fundingIntervalHours` from bulk `/fapi/v1/fundingInfo`, fetched every scan and never cached. Never assume 8h or `× 3`. Annualize with `DeltaNeutralLogic.funding_apr(rate, interval_hours)`.

@@ -19,7 +19,7 @@ Every cycle (5 minutes by default):
 2. **Close** the perp first (reduce-only), then sell the bot's spot only once the perp reads flat. The bot never opens in a cycle that closed or tried to close; a failed close is retried next cycle.
 3. **Open** when nothing is tracked:
    - Any untracked perp position blocks opening. A clean hedge is adopted; anything else writes `halt.json` and the bot stops opening.
-   - The best pair must pass every filter: listed on both markets, predicted funding ≥ 0, ≥ $250M 24h volume, spot/perp basis ≤ 0.15%, and 7-day average APR ≥ `min_funding_apr`. A pair with missing data is excluded.
+   - The best pair must pass every filter: listed on both markets, a two-sided spot and perp book, predicted funding ≥ 0, ≥ $250M 24h volume, spot/perp basis ≤ 0.15%, and 7-day average APR ≥ `min_funding_apr`. A pair with missing data is excluded (several paired coins have one-sided or empty spot books).
    - Legs go out **one at a time**, spot first; the perp hedge is sized from the spot actually received. Each leg is verified by reading the position back, and a failed leg is unwound.
    - If an unwind fails, or the spot filled but the hedge didn't, the bot writes `halt.json`.
 
@@ -137,9 +137,20 @@ Edit `config_volume_farming_strategy.json`:
 The stop-loss is automatic (see above). Changing `leverage` only affects the next position.
 
 ### 4. Fund the account with USDT (perp or spot; the bot rebalances)
-* Each position must be at least 3 perp lot steps and above the minimum notional. For BTC (step 0.001) that is roughly 3 × 0.001 BTC per leg, so the total USDT needed is about twice that.
-* Keep perp collateral in USDT only (asBNB or USDF collateral may cause problems).
-* Don't deposit or withdraw while a position is open: realized PnL is measured from your USDT balances.
+* **Minimum size:** each position must be at least 3 perp lot steps and above the minimum notional. For BTC, 3 × 0.001 BTC is about $252 per leg at ~$84k (30 Sep 2026).
+  * At 1x that means about **$530 USDT in total**: both legs plus the 4% buffer.
+  * Leverage lowers the total: 1 / (0.96 × L/(L+1)) × $252 gives about $395 at 2x and $350 at 3x.
+* **Use an account dedicated to the bot:**
+  * Keep perp collateral in USDT only (asBNB or USDF collateral may cause problems).
+  * Don't deposit or withdraw while a position is open: realized PnL is measured from your USDT balances.
+  * Coins you hold of the traded asset are never sold. But if the state file is lost, they make a live position look unbalanced, and the bot halts instead of adopting it.
+
+## ⬆️ Upgrading from the volume-farming version
+
+1. **Back up `volume_farming_state.json` before `git pull`.** It is no longer tracked by git, so the pull deletes your copy. Restore it afterwards.
+2. **Config keys changed.** The repo config has the new keys, and old ones (`fee_coverage_multiplier`, `use_funding_ma`, `forced_rotation_*`, `max_position_age_hours`, …) are ignored. Merge any local edits by hand.
+3. **A position that is open during the upgrade is kept and monitored.** Its realized PnL is logged as unknown, because the old version didn't record entry cash.
+4. **Run one small cycle first** (`capital_fraction` ≈ 0.05). Check the logged spot order response for which asset the fees are charged in, and compare the realized-PnL breakdown with the exchange.
 
 ## 🚀 Usage
 
