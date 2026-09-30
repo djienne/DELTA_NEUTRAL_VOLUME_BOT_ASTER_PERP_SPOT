@@ -1,8 +1,9 @@
 # Secrets — API_PRIVATE_KEY / APIV1_PRIVATE_KEY live here
 .env
 
-# Runtime state (position data, portfolio baseline)
+# Runtime state (position data, portfolio baseline) and the two_leg halt sentinel
 volume_farming_state.json
+halt.json
 
 # Logs
 volume_farming.log

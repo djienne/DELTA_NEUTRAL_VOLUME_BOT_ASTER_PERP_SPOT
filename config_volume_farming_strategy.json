@@ -1,38 +1,27 @@
 {
-  "_comment": "Volume Farming Strategy Configuration",
-  "_description": "Default configuration for automated delta-neutral funding rate farming",
+  "_comment": "Delta-neutral funding carry: long spot + short perp on the best pair, held for weeks. Rules in CLAUDE.md.",
 
   "capital_management": {
     "capital_fraction": 0.96,
-    "_comment_fraction": "Fraction of total available USDT to deploy per position (0.95 = 95%, keeps 5% buffer)"
+    "_comment_fraction": "Fraction of the rebalanced USDT deployed per position (keeps a buffer for fees and price moves)"
   },
 
   "funding_rate_strategy": {
-    "min_funding_apr": 5.4,
-    "use_funding_ma": false,
-    "funding_ma_periods": 10,
-    "_comment_apr": "Minimum effective APR (%) to consider opening a position",
-    "_comment_ma": "Use moving average for stable signals, periods = number of historical rates"
+    "min_funding_apr": 10.0,
+    "funding_avg_days": 7,
+    "_comment_apr": "Enter only when the funding APR averaged over funding_avg_days is >= this. A round trip costs ~0.4% of notional (4 taker legs at 0.1%, conservative until real fills are measured); paying that back over a ~30-day hold with a 2x margin needs 2 x 0.4% x 365/30 = ~10% APR."
   },
 
   "position_management": {
-    "fee_coverage_multiplier": 1.2,
-    "max_position_age_hours": 336,
+    "min_hold_days": 7,
+    "rotation_min_apr_gain": 10.0,
     "loop_interval_seconds": 300,
-    "enable_forced_rotation": true,
-    "forced_rotation_min_hours": 8.0,
-    "forced_rotation_apr_multiplier": 2.0,
-    "_comment_fee_coverage": "Close when funding received >= this multiplier × total fees (1.5 = 150%). Some margin to also cover spreads.",
-    "_comment_max_age": "Maximum hours to hold a position before forcing rotation",
-    "_comment_check_interval": "Seconds between position evaluation cycles (300 = 5 minutes)",
-    "_comment_forced_rotation": "Enable forced rotation when a better opportunity exists (enabled by default)",
-    "_comment_forced_rotation_min_hours": "Minimum hours before considering forced rotation (default: 4.0)",
-    "_comment_forced_rotation_multiplier": "New APR must be at least this multiplier × current APR to force rotation (default: 2.0 = 2x better)"
+    "_comment_rotation": "After min_hold_days, rotate only if another pair's averaged APR beats the held one by this many APR points (same ~10 point arithmetic as above). A held pair whose averaged APR drops to -min_funding_apr is closed at any age.",
+    "_comment_interval": "Seconds between cycles. The stop-loss is checked every cycle, so keep this short."
   },
 
   "leverage_settings": {
     "leverage": 1,
-    "_comment_leverage": "Leverage for perpetual positions (1-3). 1=50/50 split, 2=1/3 perp 2/3 spot, 3=1/4 perp 3/4 spot. Higher leverage = more capital efficiency.",
-    "_comment_stop_loss": "Emergency stop-loss is calculated AUTOMATICALLY based on leverage with 0.7 safety buffer to prevent liquidation. For 1x: -50%, 2x: -33%, 3x: -24%"
+    "_comment_leverage": "Perp leverage 1-3. 1 = 50/50 spot/perp, 2 = 67/33, 3 = 75/25. Stop-loss is automatic on perp PnL as % of perp notional, 70% of the way to liquidation: 1x -69%, 2x -34%, 3x -22%."
   }
 }
