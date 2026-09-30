@@ -26,13 +26,11 @@ from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, Optional, Tuple
 
 from colorama import Fore, Style, init
-from dotenv import load_dotenv
 
 from aster_api_manager import AsterApiManager
 from strategy_logic import DN_IMBALANCE_PCT, DeltaNeutralLogic as Logic
 from two_leg import LegStatus, read_halt, write_halt
 
-load_dotenv()
 init()
 logger = logging.getLogger(__name__)
 
@@ -62,13 +60,7 @@ class VolumeFarmingStrategy:
                  min_hold_days: float, rotation_min_apr_gain: float, loop_interval_seconds: int, leverage: int):
         if not 1 <= leverage <= 3:
             raise ValueError(f"Leverage must be between 1 and 3, got {leverage}")
-        self.api_manager = AsterApiManager(
-            api_user=os.getenv('API_USER'),
-            api_signer=os.getenv('API_SIGNER'),
-            api_private_key=os.getenv('API_PRIVATE_KEY'),
-            apiv1_public=os.getenv('APIV1_PUBLIC_KEY'),
-            apiv1_private=os.getenv('APIV1_PRIVATE_KEY')
-        )
+        self.api_manager = AsterApiManager.from_env()
         self.capital_fraction = capital_fraction
         self.min_funding_apr = min_funding_apr
         self.funding_avg_days = funding_avg_days
@@ -510,12 +502,12 @@ def setup_logging():
 async def main():
     """Entry point."""
     setup_logging()
-    required = ['API_USER', 'API_SIGNER', 'API_PRIVATE_KEY', 'APIV1_PUBLIC_KEY', 'APIV1_PRIVATE_KEY']
-    missing = [v for v in required if not os.getenv(v)]
-    if missing:
-        logger.error(f"Missing environment variables: {', '.join(missing)} (see .env.example)")
+    try:
+        strategy = VolumeFarmingStrategy(**load_config())
+    except ValueError as e:  # missing/invalid credentials or leverage
+        logger.error(str(e))
         sys.exit(1)
-    await VolumeFarmingStrategy(**load_config()).run()
+    await strategy.run()
 
 
 if __name__ == '__main__':

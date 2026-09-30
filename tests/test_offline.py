@@ -116,6 +116,18 @@ def test_close_reason(held_apr, best, best_apr, days, expected):
     assert (reason is None) if expected is None else (expected in reason)
 
 
+def test_credentials_come_from_aster_env(monkeypatch, tmp_path):
+    import aster_api_manager
+    env_file = tmp_path / 'aster.env'
+    monkeypatch.setattr(aster_api_manager, 'ENV_FILE', str(env_file))
+    for k in CREDS:
+        monkeypatch.delenv(k)
+    with pytest.raises(ValueError, match='aster.env'):
+        AsterApiManager.from_env()
+    env_file.write_text(''.join(f"{k}={v}\n" for k, v in CREDS.items()))
+    assert AsterApiManager.from_env().api_user == CREDS['API_USER']
+
+
 # --- open_dn: sequential legs through two_leg ---
 
 def test_open_hedges_the_spot_actually_received():

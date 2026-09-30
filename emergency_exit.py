@@ -12,8 +12,6 @@ import json
 import os
 from datetime import datetime
 
-from dotenv import load_dotenv
-
 from aster_api_manager import AsterApiManager
 from two_leg import write_halt
 
@@ -21,7 +19,6 @@ STATE_FILE = 'volume_farming_state.json'
 
 
 async def main():
-    load_dotenv()
     if not os.path.exists(STATE_FILE):
         print(f"No {STATE_FILE}: nothing tracked to close.")
         return
@@ -32,17 +29,11 @@ async def main():
         print("No position tracked in the state file.")
         return
 
+    api = AsterApiManager.from_env()  # fail on missing credentials before halting anything
     symbol, spot_qty = position['symbol'], float(position['spot_qty'])
     print(f"Will close {symbol}: perp short at market (reduce-only), then sell up to {spot_qty} spot.")
     input("Press ENTER to halt the bot and close, or Ctrl+C to cancel: ")
     write_halt("emergency_exit.py", symbol=symbol, venue="Aster", residual_qty=float(position.get('perp_qty') or 0))
-
-    api = AsterApiManager(
-        api_user=os.getenv('API_USER'),
-        api_signer=os.getenv('API_SIGNER'),
-        api_private_key=os.getenv('API_PRIVATE_KEY'),
-        apiv1_public=os.getenv('APIV1_PUBLIC_KEY'),
-        apiv1_private=os.getenv('APIV1_PRIVATE_KEY'))
     try:
         result = await api.close_dn(symbol, spot_qty)
     finally:

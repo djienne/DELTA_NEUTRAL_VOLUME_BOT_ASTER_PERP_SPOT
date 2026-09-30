@@ -10,7 +10,7 @@ services:
           cpus: '0.5'
           memory: '512M'
     env_file:
-      - .env
+      - aster.env
     restart: unless-stopped
     stdin_open: true
     tty: true

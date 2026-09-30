@@ -62,7 +62,10 @@ pip install -r requirements.txt && python volume_farming_strategy.py
 python -m pytest tests -q                                # offline, no keys needed
 ```
 
-The bot needs all 5 variables in `.env`: `API_USER`, `API_SIGNER`, `API_PRIVATE_KEY`, `APIV1_PUBLIC_KEY`, `APIV1_PRIVATE_KEY`. Utility scripts construct `AsterApiManager(api_user, api_signer, api_private_key, apiv1_public, apiv1_private)`.
+Credentials live in `aster.env`, next to the code. It is git-ignored; the tracked template is `aster.env.example`. It needs all 5 variables: `API_USER`, `API_SIGNER`, `API_PRIVATE_KEY`, `APIV1_PUBLIC_KEY`, `APIV1_PRIVATE_KEY`.
+
+- Build the API client with `AsterApiManager.from_env()`, the only place credentials are read. Never put keys in the JSON config.
+- docker-compose injects the same file via `env_file: aster.env`. Variables already in the environment take precedence.
 
 ## Conventions
 

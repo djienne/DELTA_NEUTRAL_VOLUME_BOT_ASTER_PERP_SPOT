@@ -8,18 +8,13 @@ showing the price spread between them.
 
 import asyncio
 import aiohttp
-import os
 from datetime import datetime
 from colorama import Fore, Style, init
-from dotenv import load_dotenv
 
 from aster_api_manager import AsterApiManager
 
 # Initialize colorama
 init(autoreset=True)
-
-# Load environment variables
-load_dotenv()
 
 
 async def check_price_spreads():
@@ -30,20 +25,7 @@ async def check_price_spreads():
     print(f"{Fore.CYAN}Spot-Perp Price Spread Analysis - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC{Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'='*100}{Style.RESET_ALL}\n")
 
-    # Initialize API manager
-    api_user = os.getenv('API_USER')
-    api_signer = os.getenv('API_SIGNER')
-    api_private_key = os.getenv('API_PRIVATE_KEY')
-    apiv1_public = os.getenv('APIV1_PUBLIC_KEY')
-    apiv1_private = os.getenv('APIV1_PRIVATE_KEY')
-
-    api_manager = AsterApiManager(
-        api_user=api_user,
-        api_signer=api_signer,
-        api_private_key=api_private_key,
-        apiv1_public=apiv1_public,
-        apiv1_private=apiv1_private
-    )
+    api_manager = AsterApiManager.from_env()
 
     try:
         # Get all available delta-neutral pairs

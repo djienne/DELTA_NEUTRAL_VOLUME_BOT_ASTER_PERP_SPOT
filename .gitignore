@@ -1,4 +1,5 @@
-# Secrets — API_PRIVATE_KEY / APIV1_PRIVATE_KEY live here
+# Secrets — API_PRIVATE_KEY / APIV1_PRIVATE_KEY live here (template: aster.env.example)
+aster.env
 .env
 
 # Runtime state (position data, portfolio baseline) and the two_leg halt sentinel

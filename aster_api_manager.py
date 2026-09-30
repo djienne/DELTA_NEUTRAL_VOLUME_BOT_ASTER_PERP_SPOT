@@ -6,9 +6,11 @@ import hashlib
 import json
 import logging
 import math
+import os
 import urllib.parse
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Dict, List, Optional, Any, Tuple
+from dotenv import load_dotenv
 from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -21,6 +23,10 @@ logger = logging.getLogger(__name__)
 # Base URLs for the APIs
 FUTURES_BASE_URL = "https://fapi.asterdex.com"
 SPOT_BASE_URL = "https://sapi.asterdex.com"
+
+# Credentials live in aster.env next to this file (git-ignored; template: aster.env.example)
+ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'aster.env')
+CREDENTIAL_VARS = ('API_USER', 'API_SIGNER', 'API_PRIVATE_KEY', 'APIV1_PUBLIC_KEY', 'APIV1_PRIVATE_KEY')
 
 
 def fmt_qty(qty: float, step, rounding=ROUND_DOWN) -> str:
@@ -72,6 +78,16 @@ class AsterApiManager:
 
         self.session = None
         self._exchange_info_cache: Dict[str, dict] = {}
+
+    @classmethod
+    def from_env(cls) -> 'AsterApiManager':
+        """Build from aster.env. Variables already in the environment win (docker-compose
+        injects the same file through env_file)."""
+        load_dotenv(ENV_FILE)
+        missing = [v for v in CREDENTIAL_VARS if not os.getenv(v)]
+        if missing:
+            raise ValueError(f"Missing {', '.join(missing)}: copy aster.env.example to aster.env and fill it in")
+        return cls(*(os.getenv(v) for v in CREDENTIAL_VARS))
 
     def _session(self) -> aiohttp.ClientSession:
         # A hung request must not stall the stop-loss check for aiohttp's default 5 minutes.

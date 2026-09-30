@@ -66,11 +66,13 @@ Delete `halt.json` afterwards to let the bot trade again. It uses market orders,
 
 ### 2. Set Up API Keys
 
-Create a `.env` file from the example and add your API credentials.
+API keys go in `aster.env`, next to the scripts. It is git-ignored, so it is never committed. Create it from the tracked template:
 
 ```bash
-cp .env.example .env
+cp aster.env.example aster.env
 ```
+
+`config_volume_farming_strategy.json` holds strategy settings only; never put keys in it.
 
 #### Getting Your API Credentials
 
@@ -103,22 +105,22 @@ This will give you:
 
 > **⚠️ Important:** Both API keys will only be shown once! Make sure to save them securely.
 
-#### Configure Your `.env` File
-
-Edit `.env` with your Aster exchange API keys:
+#### Fill In `aster.env`
 
 ```env
-# Aster API v3 Credentials (Perpetual API - Pro API)
-API_USER="your_eth_wallet_address"
-API_SIGNER="your_api_signer_key"
-API_PRIVATE_KEY="your_api_private_key"
+# Pro API (perpetual, v3)
+API_USER=0xYourWalletAddress
+API_SIGNER=0xGeneratedSignerAddress
+API_PRIVATE_KEY=0xGeneratedPrivateKey
 
-# Aster API v1 Credentials (Spot API - API)
-APIV1_PUBLIC_KEY="your_v1_public_key"
-APIV1_PRIVATE_KEY="your_v1_private_key"
+# API (spot, v1)
+APIV1_PUBLIC_KEY=your_v1_public_key
+APIV1_PRIVATE_KEY=your_v1_private_key
 ```
 
-> **Note:** Never commit your `.env` file. Both sets of credentials are required for the bot to function.
+> **Note:** Both sets of credentials are required.
+> - Docker reads the file through `env_file` in `docker-compose.yml`; the scripts load it themselves.
+> - A missing or placeholder value stops the bot at startup with a message naming the key.
 
 ### 3. Configure the Strategy
 
@@ -149,8 +151,9 @@ The stop-loss is automatic (see above). Changing `leverage` only affects the nex
 
 1. **Back up `volume_farming_state.json` before `git pull`.** It is no longer tracked by git, so the pull deletes your copy. Restore it afterwards.
 2. **Config keys changed.** The repo config has the new keys, and old ones (`fee_coverage_multiplier`, `use_funding_ma`, `forced_rotation_*`, `max_position_age_hours`, …) are ignored. Merge any local edits by hand.
-3. **A position that is open during the upgrade is kept and monitored.** Its realized PnL is logged as unknown, because the old version didn't record entry cash.
-4. **Run one small cycle first** (`capital_fraction` ≈ 0.05). Check the logged spot order response for which asset the fees are charged in, and compare the realized-PnL breakdown with the exchange.
+3. **Rename your credentials file:** `mv .env aster.env`. The bot and docker-compose no longer read `.env`.
+4. **A position that is open during the upgrade is kept and monitored.** Its realized PnL is logged as unknown, because the old version didn't record entry cash.
+5. **Run one small cycle first** (`capital_fraction` ≈ 0.05). Check the logged spot order response for which asset the fees are charged in, and compare the realized-PnL breakdown with the exchange.
 
 ## 🚀 Usage
 

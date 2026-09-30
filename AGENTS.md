@@ -6,7 +6,7 @@ Core strategy code lives in `volume_farming_strategy.py`, orchestrating the trad
 ## Build, Test, and Development Commands
 - `python -m venv .venv && . .venv/bin/activate`: create and activate the local virtual environment (Windows PowerShell users can run `.venv\Scripts\Activate.ps1`).
 - `pip install -r requirements.txt`: install runtime and toolchain dependencies.
-- `python volume_farming_strategy.py`: start the live delta-neutral loop using the active `.env` and state files.
+- `python volume_farming_strategy.py`: start the live delta-neutral loop using `aster.env` (credentials; template `aster.env.example`) and the state file.
 - `python -m pytest tests -q`: offline checks of the trade path and decision rules; no keys or network needed.
 - `docker-compose up --build`: build and launch the bot with the bundled Docker image for reproducible deployments.
 
@@ -20,4 +20,4 @@ The repository uses `pytest`; tests live in `tests/test_*.py` and run offline ag
 Write concise, imperative commit titles under 72 characters (e.g., `improve`/`fix`/`refactor` prefixes). Include context in the body about risk controls, API surface changes, and required config updates. Pull requests should link relevant issues or tasks, summarize strategic changes, list manual or automated test evidence, and attach screenshots or metrics when UI output changes. Highlight any new environment variables or scheduled jobs.
 
 ## Security & Configuration Tips
-Never commit `.env`, API keys, or generated state files. Validate any new environment variable names in `README.md` and `docker-compose.yml`. If you script migrations for stored state, provide idempotent upgrade logic so older checkpoints continue to load safely. Rotate keys immediately after test runs that touch production balances.
+Never commit `aster.env`, API keys, or generated state files; credentials are read only by `AsterApiManager.from_env()`. Validate any new environment variable names in `README.md` and `docker-compose.yml`. If you script migrations for stored state, provide idempotent upgrade logic so older checkpoints continue to load safely. Rotate keys immediately after test runs that touch production balances.
