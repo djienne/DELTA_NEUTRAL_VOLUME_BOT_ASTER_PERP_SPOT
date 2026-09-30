@@ -94,6 +94,10 @@ async def check_price_spreads():
             perp_bid = float(perp_bid)
             perp_ask = float(perp_ask)
 
+            # One-sided or empty books report 0 for the missing side (several spot books do)
+            if min(spot_bid, spot_ask, perp_bid, perp_ask) <= 0:
+                continue
+
             # Calculate mid prices
             spot_mid = (spot_bid + spot_ask) / 2
             perp_mid = (perp_bid + perp_ask) / 2

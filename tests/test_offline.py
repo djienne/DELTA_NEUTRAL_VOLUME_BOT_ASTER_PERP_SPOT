@@ -155,6 +155,22 @@ def test_close_sells_only_the_bots_spot():
     assert fake.orders[0][:2] == ('perp', 'BUY') and fake.orders[0][3] is True
 
 
+def test_empty_spot_book_is_no_book():
+    api = AsterApiManager(*CREDS.values())
+
+    async def tickers(method, url, **kwargs):
+        return [{'symbol': 'AUSDT', 'bidPrice': '1.0', 'askPrice': '1.1'},
+                {'symbol': 'BUSDT', 'bidPrice': '0.00000', 'askPrice': '0.00000'}]
+    api._request = tickers
+    assert asyncio.run(api.get_book_tickers('spot')) == {'AUSDT': (1.0, 1.1)}
+
+
+def test_close_keeps_spot_when_spot_book_is_empty():
+    fake = FakeAster(spot=0.5, perp=-0.5)
+    result = asyncio.run(make_api(fake, price=0.0).close_dn('XUSDT', 0.5))
+    assert not result['success'] and result['spot_left'] == 0.5 and fake.spot == 0.5
+
+
 def test_unfilled_perp_close_leaves_spot_untouched():
     fake = FakeAster(spot=0.5, perp=-0.5, perp_close_fills=False)
     result = asyncio.run(make_api(fake).close_dn('XUSDT', 0.5))

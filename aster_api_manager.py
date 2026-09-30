@@ -220,10 +220,14 @@ class AsterApiManager:
         return volumes
 
     async def get_book_tickers(self, market: str) -> Dict[str, Tuple[float, float]]:
-        """{symbol: (bid, ask)} for every symbol of 'spot' or 'perp', one call."""
+        """{symbol: (bid, ask)} for every symbol of 'spot' or 'perp' with a two-sided book, one call.
+
+        Empty books report "0.00000" (a truthy string); several paired coins have one on spot.
+        """
         url = f"{SPOT_BASE_URL}/api/v1/ticker/bookTicker" if market == 'spot' else f"{FUTURES_BASE_URL}/fapi/v1/ticker/bookTicker"
-        return {t['symbol']: (float(t['bidPrice']), float(t['askPrice']))
-                for t in await self._request('GET', url) if t.get('bidPrice') and t.get('askPrice')}
+        books = {t['symbol']: (float(t.get('bidPrice') or 0), float(t.get('askPrice') or 0))
+                 for t in await self._request('GET', url)}
+        return {s: b for s, b in books.items() if b[0] > 0 and b[1] > 0}
 
     async def get_perp_book_ticker(self, symbol: str) -> dict:
         """Get perpetuals book ticker for a symbol."""
@@ -508,7 +512,9 @@ class AsterApiManager:
                 return {'success': False, 'spot_left': spot_qty,
                         'message': f"perp still {amt} after the close order; spot left untouched"}
 
-        bid = float((await self.get_spot_book_ticker(symbol))['bidPrice'])
+        bid = float((await self.get_spot_book_ticker(symbol))['bidPrice'] or 0)
+        if bid <= 0:  # empty spot book: nothing can be sold or valued; keep tracking it
+            return {'success': False, 'spot_left': spot_qty, 'message': f"no {symbol} spot bid; spot kept"}
         before = await self._spot_balance(base)
         sell = fmt_qty(min(await self._spot_balance(base, include_locked=False), spot_qty), spot_step)
         if float(sell) * bid >= spot_min:
